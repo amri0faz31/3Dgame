@@ -2691,6 +2691,7 @@ src/CMakeFiles/engine.dir/core/Game.cpp.o: /home/amri-fazlul/3D_world/src/core/G
   _deps/glm-src/glm/vec2.hpp \
   _deps/glm-src/glm/vec3.hpp \
   _deps/glm-src/glm/vec4.hpp \
+  /home/amri-fazlul/3D_world/src/audio/AudioSystem.h \
   /home/amri-fazlul/3D_world/src/character/Animator.h \
   /home/amri-fazlul/3D_world/src/character/CharacterImporter.h \
   /home/amri-fazlul/3D_world/src/character/ThirdPersonCamera.h \
@@ -2706,6 +2707,8 @@ src/CMakeFiles/engine.dir/core/Game.cpp.o: /home/amri-fazlul/3D_world/src/core/G
   /home/amri-fazlul/3D_world/src/scene/TerrainSampler.h \
   /home/amri-fazlul/3D_world/src/scene/Water.h \
   /home/amri-fazlul/3D_world/src/systems/CollisionSystem.h \
+  /home/amri-fazlul/3D_world/src/systems/InteractionSystem.h \
+  /home/amri-fazlul/3D_world/src/systems/MonsterAI.h \
   /usr/include/alloca.h \
   /usr/include/asm-generic/errno-base.h \
   /usr/include/asm-generic/errno.h \
@@ -7465,6 +7468,10 @@ _deps/glm-src/glm/gtc/matrix_inverse.hpp:
 
 /usr/include/c++/13/backward/auto_ptr.h:
 
+/home/amri-fazlul/3D_world/src/systems/MonsterAI.h:
+
+/home/amri-fazlul/3D_world/src/systems/InteractionSystem.h:
+
 /home/amri-fazlul/3D_world/src/systems/CollisionSystem.h:
 
 /home/amri-fazlul/3D_world/src/scene/TerrainSampler.h:
@@ -8570,6 +8577,8 @@ _deps/glm-src/glm/ext/vector_uint4_sized.hpp:
 _deps/glm-src/glm/simd/platform.h:
 
 _deps/glm-src/glm/detail/func_integer.inl:
+
+/home/amri-fazlul/3D_world/src/audio/AudioSystem.h:
 
 _deps/assimp-src/include/assimp/anim.h:
 

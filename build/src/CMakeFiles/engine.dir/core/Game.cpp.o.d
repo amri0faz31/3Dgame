@@ -472,6 +472,9 @@ src/CMakeFiles/engine.dir/core/Game.cpp.o: \
  /home/amri-fazlul/3D_world/src/character/ThirdPersonCamera.h \
  /usr/include/c++/13/functional /usr/include/c++/13/bits/std_function.h \
  /home/amri-fazlul/3D_world/src/systems/CollisionSystem.h \
+ /home/amri-fazlul/3D_world/src/systems/InteractionSystem.h \
+ /home/amri-fazlul/3D_world/src/systems/MonsterAI.h \
+ /home/amri-fazlul/3D_world/src/audio/AudioSystem.h \
  /usr/include/c++/13/iostream /usr/include/c++/13/istream \
  /usr/include/c++/13/bits/istream.tcc \
  /home/amri-fazlul/3D_world/src/render/Renderer.h \

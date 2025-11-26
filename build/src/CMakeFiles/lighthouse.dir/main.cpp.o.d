@@ -472,6 +472,9 @@ src/CMakeFiles/lighthouse.dir/main.cpp.o: \
  /home/amri-fazlul/3D_world/src/character/ThirdPersonCamera.h \
  /usr/include/c++/13/functional /usr/include/c++/13/bits/std_function.h \
  /home/amri-fazlul/3D_world/src/systems/CollisionSystem.h \
+ /home/amri-fazlul/3D_world/src/systems/InteractionSystem.h \
+ /home/amri-fazlul/3D_world/src/systems/MonsterAI.h \
+ /home/amri-fazlul/3D_world/src/audio/AudioSystem.h \
  /home/amri-fazlul/3D_world/src/platform/Window.h \
  /home/amri-fazlul/3D_world/src/core/Time.h /usr/include/c++/13/iostream \
  /usr/include/c++/13/istream /usr/include/c++/13/bits/istream.tcc

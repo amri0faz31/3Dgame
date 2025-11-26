@@ -82,6 +82,12 @@ private:
     unsigned int m_fireQuadVBO = 0;
     unsigned int m_fireInstanceVBO = 0;
     unsigned int m_fireTexture = 0;
+    class Shader* m_stickFlameShader = nullptr;
+    unsigned int m_stickFlameVAO = 0;
+    unsigned int m_stickFlameVBO = 0;
+    bool m_stickFlameReady = false;
+    glm::vec3 m_stickFlamePos{0.0f};
+    bool m_stickFlameVisible = false;
     struct FireParticle {
         glm::vec3 position{0.0f};
         glm::vec3 velocity{0.0f, 1.0f, 0.0f};
@@ -95,10 +101,12 @@ private:
     glm::vec3 m_campfireEmitterPos{0.0f};
     bool m_fireFXReady = false;
     void initCampfireFireFX();
+    void initStickFlameBillboard();
     void respawnFireParticle(FireParticle& particle);
     void updateFireParticles(float dt);
     void uploadFireParticlesToGPU();
     void renderFireParticles(const glm::mat4& viewProj, const glm::mat4& viewMatrix);
+    void renderStickFlame(const glm::mat4& viewProj, const glm::mat4& viewMatrix);
     void updateCampfireLight(float dt);
 
     float m_waterLevel = 10.0f;
@@ -163,6 +171,16 @@ private:
         unsigned int totalVertexCount = 0;
         unsigned int totalIndexCount = 0;
     };
+
+    struct WorldItem {
+        glm::vec3 position{0.0f};
+        glm::quat rotation{1.0f, 0.0f, 0.0f, 0.0f};
+        float scale = 1.0f;
+        float colliderRadius = 1.0f;
+        bool isHeld = false;
+        bool collisionEnabled = true;
+        glm::mat4 worldMatrix{1.0f};
+    };
     
     // Lighthouse model
     StaticMesh m_lighthouseMesh;
@@ -193,6 +211,27 @@ private:
     float m_forestHutYawDegrees = 0.0f;
     float m_forestHutPitchDegrees = 0.0f;
     bool m_forestHutReady = false;
+
+    // Stick world item
+    StaticMesh m_stickMesh;
+    WorldItem m_stickItem;
+    bool m_stickReady = false;
+    bool m_canPickupStick = false;
+    bool m_stickActionHeld = false;
+    float m_stickHoverOffset = 0.05f;
+    float m_stickDropDistance = 0.8f;
+    float m_stickBaseHeight = 0.0f;
+    float m_stickTipLength = 0.0f;
+    glm::quat m_stickGroundRotation{1.0f, 0.0f, 0.0f, 0.0f};
+    glm::vec3 m_stickLocalOffset{0.0f, 0.65f, 0.35f};
+    glm::vec3 m_stickHoldEuler{-45.0f, 10.0f, 6.0f};
+    bool m_stickLit = false;
+    bool m_canIgniteStick = false;
+    bool m_stickIgniteHeld = false;
+    float m_stickIgniteRadius = 3.5f;
+    bool m_wasStickNearCampfire = false;
+    bool m_prevCanIgniteStick = false;
+    PointLight m_stickLight;
 
     // New systems for gameplay
     AudioSystem m_audio;
@@ -233,4 +272,12 @@ private:
     void renderUI();
     std::string getRegionAtPosition(const glm::vec3& pos) const;
     bool loadStaticModel(const std::string& path, StaticMesh& outMesh);
+    void updateStickInteraction();
+    void refreshStickWorldMatrix();
+    void attachStickToHand();
+    void dropStickToTerrain();
+    glm::mat4 buildHeldStickMatrix() const;
+    glm::vec3 getStickTipWorldPosition() const;
+    void igniteStickTorch();
+    void updateStickLight(const glm::vec3& tipWorldPos);
 };

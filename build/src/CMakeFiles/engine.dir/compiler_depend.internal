@@ -2701,6 +2701,7 @@ src/CMakeFiles/engine.dir/core/Game.cpp.o
  /home/amri-fazlul/3D_world/build/_deps/glm-src/glm/vec2.hpp
  /home/amri-fazlul/3D_world/build/_deps/glm-src/glm/vec3.hpp
  /home/amri-fazlul/3D_world/build/_deps/glm-src/glm/vec4.hpp
+ /home/amri-fazlul/3D_world/src/audio/AudioSystem.h
  /home/amri-fazlul/3D_world/src/character/Animator.h
  /home/amri-fazlul/3D_world/src/character/CharacterImporter.h
  /home/amri-fazlul/3D_world/src/character/ThirdPersonCamera.h
@@ -2716,6 +2717,8 @@ src/CMakeFiles/engine.dir/core/Game.cpp.o
  /home/amri-fazlul/3D_world/src/scene/TerrainSampler.h
  /home/amri-fazlul/3D_world/src/scene/Water.h
  /home/amri-fazlul/3D_world/src/systems/CollisionSystem.h
+ /home/amri-fazlul/3D_world/src/systems/InteractionSystem.h
+ /home/amri-fazlul/3D_world/src/systems/MonsterAI.h
  /usr/include/alloca.h
  /usr/include/asm-generic/errno-base.h
  /usr/include/asm-generic/errno.h

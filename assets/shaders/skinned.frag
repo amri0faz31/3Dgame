@@ -22,11 +22,12 @@ uniform float uFogStart;
 uniform float uFogRange;
 uniform float uSpecularStrength;
 uniform float uShininess;
-uniform bool uPointLightEnabled;
-uniform vec3 uPointLightPos;
-uniform vec3 uPointLightColor;
-uniform float uPointLightIntensity;
-uniform float uPointLightRadius;
+const int MAX_POINT_LIGHTS = 2;
+uniform int uPointLightCount;
+uniform vec3 uPointLightPos[MAX_POINT_LIGHTS];
+uniform vec3 uPointLightColor[MAX_POINT_LIGHTS];
+uniform float uPointLightIntensity[MAX_POINT_LIGHTS];
+uniform float uPointLightRadius[MAX_POINT_LIGHTS];
 
 float calculateShadow(vec4 fragPosLightSpace, vec3 normal, vec3 lightDir) {
     vec3 projCoords = fragPosLightSpace.xyz / fragPosLightSpace.w;
@@ -70,16 +71,16 @@ void main(){
     vec3 diffuse = base * diff * uLightColor * shadow;
     vec3 specular = spec * uLightColor * shadow;
 
-    if(uPointLightEnabled){
-        vec3 toLight = uPointLightPos - fs_in.worldPos;
+    for(int i = 0; i < uPointLightCount; ++i){
+        vec3 toLight = uPointLightPos[i] - fs_in.worldPos;
         float dist = length(toLight);
-        if(dist < uPointLightRadius){
+        if(dist < uPointLightRadius[i]){
             vec3 pointDir = normalize(toLight);
-            float attenuation = 1.0 - dist / uPointLightRadius;
+            float attenuation = 1.0 - dist / uPointLightRadius[i];
             attenuation *= attenuation;
             float nDotL = max(dot(normal, pointDir), 0.0);
             if(nDotL > 0.0){
-                vec3 pointColor = uPointLightColor * uPointLightIntensity;
+                vec3 pointColor = uPointLightColor[i] * uPointLightIntensity[i];
                 diffuse += base * nDotL * pointColor * attenuation;
                 float specPoint = pow(max(dot(normal, normalize(pointDir + viewDir)), 0.0), uShininess) * uSpecularStrength;
                 specular += specPoint * pointColor * attenuation;

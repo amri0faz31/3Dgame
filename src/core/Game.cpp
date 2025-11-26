@@ -41,10 +41,16 @@
 
 extern Window* g_windowPtr; // declared in main for access
 
+// Explicit forward declarations so gameplay helpers always compile even if
+// TerrainSampler.h is not included through other translation units.
+void setActiveTerrain(Terrain* terrain);
+float getTerrainHeightAt(float worldX, float worldZ);
+
 namespace {
 constexpr size_t kMaxBones = 128;
 constexpr int kMaxFireParticles = 96;
 constexpr int kFireQuadVertexCount = 6;
+constexpr int kMaxPointLights = 2;
 constexpr std::array<float, kFireQuadVertexCount * 4> kFireQuadVertices = {
     // corner.x, corner.y, u, v
     -0.5f, -0.5f, 0.0f, 1.0f,
@@ -102,6 +108,15 @@ glm::vec3 projectOntoPlane(const glm::vec3& v, const glm::vec3& normal){
     }
     return projected / std::sqrt(len2);
 }
+
+glm::mat4 composeTransform(const glm::vec3& position,
+                           const glm::quat& rotation,
+                           float uniformScale){
+    glm::mat4 model = glm::translate(glm::mat4(1.0f), position);
+    model *= glm::mat4_cast(rotation);
+    model = glm::scale(model, glm::vec3(uniformScale));
+    return model;
+}
 }
 
 static const char* kVertex = R"GLSL(
@@ -149,11 +164,12 @@ uniform sampler2D uTexRocks;
 uniform sampler2D uShadowMap;
 uniform mat4 uLightSpace;
 uniform vec3 uSkyColor; uniform float uFogStart; uniform float uFogRange;
-uniform bool uPointLightEnabled;
-uniform vec3 uPointLightPos;
-uniform vec3 uPointLightColor;
-uniform float uPointLightIntensity;
-uniform float uPointLightRadius;
+const int MAX_POINT_LIGHTS = 2;
+uniform int uPointLightCount;
+uniform vec3 uPointLightPos[MAX_POINT_LIGHTS];
+uniform vec3 uPointLightColor[MAX_POINT_LIGHTS];
+uniform float uPointLightIntensity[MAX_POINT_LIGHTS];
+uniform float uPointLightRadius[MAX_POINT_LIGHTS];
 
 // Base terrain palette: light green, dark green, and light brown
 const vec3 lightGreen  = vec3(0.35, 0.80, 0.30);
@@ -280,16 +296,16 @@ void main(){
     
     vec3 color = ambient + diffuse + specular + rimLight;
 
-    if(uPointLightEnabled){
-        vec3 toLight = uPointLightPos - vWorldPos;
+    for(int i = 0; i < uPointLightCount; ++i){
+        vec3 toLight = uPointLightPos[i] - vWorldPos;
         float distPoint = length(toLight);
-        if(distPoint < uPointLightRadius){
+        if(distPoint < uPointLightRadius[i]){
             vec3 pointDir = normalize(toLight);
-            float attenuation = 1.0 - distPoint / uPointLightRadius;
+            float attenuation = 1.0 - distPoint / uPointLightRadius[i];
             attenuation = attenuation * attenuation;
             float pointDiffuseN = max(dot(n, pointDir), 0.0);
             if(pointDiffuseN > 0.0){
-                vec3 pointColor = uPointLightColor * uPointLightIntensity;
+                vec3 pointColor = uPointLightColor[i] * uPointLightIntensity[i];
                 vec3 pointDiffuse = base * pointDiffuseN * pointColor;
                 float pointSpecPow = pow(max(dot(n, normalize(pointDir + V)), 0.0), uShininess);
                 float pointSpecStrength = pointSpecPow * uSpecularStrength * nightSpecScale;
@@ -374,11 +390,12 @@ uniform vec3 uCameraPos;
 uniform vec3 uLightDir;
 uniform vec3 uLightColor;
 uniform vec3 uSkyColor;
-uniform bool uPointLightEnabled;
-uniform vec3 uPointLightPos;
-uniform vec3 uPointLightColor;
-uniform float uPointLightIntensity;
-uniform float uPointLightRadius;
+const int MAX_POINT_LIGHTS = 2;
+uniform int uPointLightCount;
+uniform vec3 uPointLightPos[MAX_POINT_LIGHTS];
+uniform vec3 uPointLightColor[MAX_POINT_LIGHTS];
+uniform float uPointLightIntensity[MAX_POINT_LIGHTS];
+uniform float uPointLightRadius[MAX_POINT_LIGHTS];
 uniform float uFogStart;
 uniform float uFogRange;
 uniform sampler2D uWaveNormal0;
@@ -453,16 +470,16 @@ void main(){
     // Combine lighting: base water color + diffuse + specular highlight
     vec3 color = waterColor * (0.85 + diff * 0.15) * shadow + spec * uLightColor * shadow;
 
-    if(uPointLightEnabled){
-        vec3 toLight = uPointLightPos - fs_in.worldPos;
+    for(int i = 0; i < uPointLightCount; ++i){
+        vec3 toLight = uPointLightPos[i] - fs_in.worldPos;
         float distPoint = length(toLight);
-        if(distPoint < uPointLightRadius){
+        if(distPoint < uPointLightRadius[i]){
             vec3 pointDir = normalize(toLight);
-            float attenuation = 1.0 - distPoint / uPointLightRadius;
+            float attenuation = 1.0 - distPoint / uPointLightRadius[i];
             attenuation *= attenuation;
             float nDotPoint = max(dot(n, pointDir), 0.0);
             if(nDotPoint > 0.0){
-                vec3 pointColor = uPointLightColor * uPointLightIntensity;
+                vec3 pointColor = uPointLightColor[i] * uPointLightIntensity[i];
                 vec3 pointDiffuse = waterColor * nDotPoint * pointColor;
                 vec3 HPoint = normalize(pointDir + V);
                 float pointSpec = pow(max(dot(n, HPoint), 0.0), 192.0);
@@ -629,11 +646,12 @@ uniform float uAlphaCutoff;
 uniform vec3 uLightDir;
 uniform vec3 uLightColor;
 uniform vec3 uAmbientColor;
-uniform bool uPointLightEnabled;
-uniform vec3 uPointLightPos;
-uniform vec3 uPointLightColor;
-uniform float uPointLightIntensity;
-uniform float uPointLightRadius;
+const int MAX_POINT_LIGHTS = 2;
+uniform int uPointLightCount;
+uniform vec3 uPointLightPos[MAX_POINT_LIGHTS];
+uniform vec3 uPointLightColor[MAX_POINT_LIGHTS];
+uniform float uPointLightIntensity[MAX_POINT_LIGHTS];
+uniform float uPointLightRadius[MAX_POINT_LIGHTS];
 
 float getShadow() {
     vec3 proj = fs_in.lightSpacePos.xyz / fs_in.lightSpacePos.w;
@@ -669,16 +687,16 @@ void main(){
     vec3 ambient = tex.rgb * uAmbientColor;
     vec3 diffuse = tex.rgb * NdotL * uLightColor * shadowFactor;
 
-    if(uPointLightEnabled){
-        vec3 toLight = uPointLightPos - fs_in.worldPos;
+    for(int i = 0; i < uPointLightCount; ++i){
+        vec3 toLight = uPointLightPos[i] - fs_in.worldPos;
         float dist = length(toLight);
-        if(dist < uPointLightRadius){
+        if(dist < uPointLightRadius[i]){
             vec3 pointDir = normalize(toLight);
             float pointDiffuse = max(dot(normal, pointDir), 0.0);
             if(pointDiffuse > 0.0){
-                float attenuation = 1.0 - dist / uPointLightRadius;
+                float attenuation = 1.0 - dist / uPointLightRadius[i];
                 attenuation *= attenuation;
-                vec3 pointColor = uPointLightColor * uPointLightIntensity;
+                vec3 pointColor = uPointLightColor[i] * uPointLightIntensity[i];
                 diffuse += tex.rgb * pointDiffuse * pointColor * attenuation;
             }
         }
@@ -728,6 +746,39 @@ void main(){
     color = mix(color, endCol, life * life);
     float alpha = texSample.a * (1.0 - life);
     FragColor = vec4(color * texSample.rgb, alpha);
+}
+)GLSL";
+
+static const char* kStickFlameVert = R"GLSL(
+#version 450 core
+layout(location=0) in vec2 aCorner;
+layout(location=1) in vec2 aUV;
+uniform mat4 uViewProj;
+uniform vec3 uWorldPos;
+uniform vec3 uCameraRight;
+uniform vec3 uCameraUp;
+uniform float uSize;
+out vec2 vUV;
+void main(){
+    vec3 offset = (uCameraRight * aCorner.x + uCameraUp * aCorner.y) * uSize;
+    vec3 worldPos = uWorldPos + offset;
+    gl_Position = uViewProj * vec4(worldPos, 1.0);
+    vUV = aUV;
+}
+)GLSL";
+
+static const char* kStickFlameFrag = R"GLSL(
+#version 450 core
+in vec2 vUV;
+out vec4 FragColor;
+uniform sampler2D uFlameTex;
+uniform float uGlow;
+void main(){
+    vec4 texSample = texture(uFlameTex, vUV);
+    if(texSample.a < 0.05) discard;
+    vec3 warm = mix(vec3(1.0, 0.75, 0.35), vec3(1.0, 0.35, 0.05), clamp(uGlow, 0.0, 1.0));
+    vec3 color = texSample.rgb * warm;
+    FragColor = vec4(color, texSample.a * 0.9);
 }
 )GLSL";
 
@@ -1194,8 +1245,15 @@ bool Game::init(){
 
     if(m_characterReady){
         m_characterScale = 0.025f;  // Reduced by half (was 0.05f)
-        glm::vec3 spawn(0.0f, getTerrainHeightAt(0.0f, 0.0f), 0.0f);
+        glm::vec2 nearCampfireXZ(136.0f, 78.0f);
+        glm::vec3 spawn(nearCampfireXZ.x,
+                getTerrainHeightAt(nearCampfireXZ.x, nearCampfireXZ.y),
+                nearCampfireXZ.y);
         m_characterController.position = spawn;
+        glm::vec2 toCampfire = campfireClearingCenter - nearCampfireXZ;
+        if(glm::length2(toCampfire) > 1e-4f){
+            m_characterController.yaw = std::atan2(toCampfire.x, toCampfire.y);
+        }
         m_characterHeight = glm::max(0.001f, m_characterMesh.maxBounds.y - m_characterMesh.minBounds.y);
         m_characterFeetOffset = -m_characterMesh.minBounds.y;
         m_characterController.position.y = spawn.y - m_characterFeetOffset * m_characterScale;
@@ -1227,6 +1285,7 @@ bool Game::init(){
                 m_characterAlbedoTex = createSolidTexture(180, 150, 135);
             }
         }
+
     } else {
         m_useThirdPersonCamera = false;
     }
@@ -1415,6 +1474,44 @@ bool Game::init(){
     } else {
         std::cerr << "[Game] Could not locate assets/models/campfire.glb" << std::endl;
         m_campfireLight.enabled = false;
+    }
+
+    // Load stick model for world interaction
+    std::string stickPath = resolveExistingPath({
+        "assets/models/stick.glb",
+        "../assets/models/stick.glb",
+        "../../assets/models/stick.glb"
+    });
+    if(!stickPath.empty()){
+        m_stickReady = loadStaticModel(stickPath, m_stickMesh);
+        if(m_stickReady){
+            m_stickItem.scale = 0.08f;  // Double previous size for better visibility
+            m_stickItem.colliderRadius = 1.0f;
+            m_stickBaseHeight = m_stickMesh.minBounds.y;
+            m_stickTipLength = m_stickMesh.maxBounds.y - m_stickBaseHeight;
+            m_stickGroundRotation = glm::angleAxis(glm::radians(20.0f), glm::vec3(0.0f, 1.0f, 0.0f));
+            m_stickItem.rotation = m_stickGroundRotation;
+            glm::vec3 dropSpot = m_campfireReady
+                ? (m_campfirePosition + glm::vec3(3.5f, 0.0f, -2.8f))
+                : glm::vec3(2.0f, 0.0f, 2.0f);
+            float baseOffset = m_stickBaseHeight * m_stickItem.scale;
+            dropSpot.y = getTerrainHeightAt(dropSpot.x, dropSpot.z) + m_stickHoverOffset - baseOffset;
+            m_stickItem.position = dropSpot;
+            m_stickItem.isHeld = false;
+            m_stickItem.collisionEnabled = true;
+            m_stickLight.enabled = false;
+            m_stickLight.baseIntensity = 1.35f;
+            m_stickLight.intensity = 0.0f;
+            m_stickLight.radius = 18.0f;
+            m_stickLight.color = glm::vec3(1.0f, 0.58f, 0.2f);
+            m_stickLight.flickerTimer = 0.0f;
+            refreshStickWorldMatrix();
+            std::cout << "[Game] Stick loaded from " << stickPath
+                      << " and placed near (" << dropSpot.x << ", " << dropSpot.y
+                      << ", " << dropSpot.z << ")" << std::endl;
+        }
+    } else {
+        std::cerr << "[Game] Could not locate assets/models/stick.glb" << std::endl;
     }
 
     // Load forest hut model
@@ -1728,6 +1825,7 @@ void Game::update(){
 
     updateFireParticles(static_cast<float>(dt));
     updateCampfireLight(static_cast<float>(dt));
+    updateStickInteraction();
 
     if(m_camera){
         m_camera->setViewport(g_windowPtr->width(), g_windowPtr->height());
@@ -1752,15 +1850,29 @@ void Game::render(){
     const float fogStart = 200.0f;
     const float fogRange = 1200.0f;
 
-    auto uploadPointLight = [&](Shader* shader){
+    auto uploadPointLights = [&](Shader* shader){
         if(!shader) return;
-        bool enabled = m_campfireLight.enabled && m_campfireReady;
-        shader->setBool("uPointLightEnabled", enabled);
-        if(enabled){
-            shader->setVec3("uPointLightPos", m_campfireLight.position);
-            shader->setVec3("uPointLightColor", m_campfireLight.color);
-            shader->setFloat("uPointLightIntensity", m_campfireLight.intensity);
-            shader->setFloat("uPointLightRadius", m_campfireLight.radius);
+        std::array<const PointLight*, kMaxPointLights> active{};
+        int count = 0;
+        auto pushLight = [&](const PointLight& light){
+            if(count >= kMaxPointLights) return;
+            if(!light.enabled) return;
+            active[count++] = &light;
+        };
+        if(m_campfireReady){
+            pushLight(m_campfireLight);
+        }
+        if(m_stickLight.enabled && m_stickLit){
+            pushLight(m_stickLight);
+        }
+        shader->setInt("uPointLightCount", count);
+        for(int i = 0; i < count; ++i){
+            const PointLight* light = active[i];
+            std::string index = "[" + std::to_string(i) + "]";
+            shader->setVec3(std::string("uPointLightPos") + index, light->position);
+            shader->setVec3(std::string("uPointLightColor") + index, light->color);
+            shader->setFloat(std::string("uPointLightIntensity") + index, light->intensity);
+            shader->setFloat(std::string("uPointLightRadius") + index, light->radius);
         }
     };
 
@@ -1827,6 +1939,18 @@ void Game::render(){
         glBindVertexArray(0);
     }
 
+    // Draw stick (world item or held) to shadow map
+    if(m_stickReady && !m_stickMesh.parts.empty()){
+        m_depthShader->bind();
+        m_depthShader->setMat4("uLightSpace", lightSpace);
+        m_depthShader->setMat4("uModel", m_stickItem.worldMatrix);
+        for(const auto& part : m_stickMesh.parts){
+            glBindVertexArray(part.vao);
+            glDrawElements(GL_TRIANGLES, part.indexCount, GL_UNSIGNED_INT, 0);
+        }
+        glBindVertexArray(0);
+    }
+
     // Draw forest hut to shadow map
     if(m_forestHutReady && !m_forestHutMesh.parts.empty()){
         glm::mat4 hutModel = glm::mat4(1.0f);
@@ -1839,6 +1963,18 @@ void Game::render(){
         m_depthShader->setMat4("uLightSpace", lightSpace);
         m_depthShader->setMat4("uModel", hutModel);
         for(const auto& part : m_forestHutMesh.parts){
+            glBindVertexArray(part.vao);
+            glDrawElements(GL_TRIANGLES, part.indexCount, GL_UNSIGNED_INT, 0);
+        }
+        glBindVertexArray(0);
+    }
+
+    // Draw stick to shadow map
+    if(m_stickReady && !m_stickMesh.parts.empty()){
+        m_depthShader->bind();
+        m_depthShader->setMat4("uLightSpace", lightSpace);
+        m_depthShader->setMat4("uModel", m_stickItem.worldMatrix);
+        for(const auto& part : m_stickMesh.parts){
             glBindVertexArray(part.vao);
             glDrawElements(GL_TRIANGLES, part.indexCount, GL_UNSIGNED_INT, 0);
         }
@@ -1866,7 +2002,7 @@ void Game::render(){
     m_shader->setFloat("uSpecularStrength", m_light.specularStrength);
     m_shader->setFloat("uShininess", m_light.shininess);
     m_shader->setVec3("uCameraPos", m_camera->position());
-    uploadPointLight(m_shader);
+    uploadPointLights(m_shader);
     // Terrain displacement + texture fetch uniforms
     float heightScale = m_terrain->recommendedHeightScale();
     m_shader->setFloat("uHeightScale", heightScale);
@@ -1914,7 +2050,7 @@ void Game::render(){
         float charAmbientMult = m_isNightMode ? 0.25f : 0.5f;
         glm::vec3 ambientColor = glm::vec3(m_light.ambient) * m_light.color * charAmbientMult;
         m_characterShader->setVec3("uAmbientColor", ambientColor);
-        uploadPointLight(m_characterShader);
+        uploadPointLights(m_characterShader);
         m_characterShader->setVec3("uCameraPos", m_camera->position());
         m_characterShader->setVec3("uSkyColor", skyColor);
         m_characterShader->setFloat("uFogStart", fogStart);
@@ -1952,7 +2088,7 @@ void Game::render(){
         float lighthouseAmbientMult = m_isNightMode ? 0.25f : 0.5f;
         glm::vec3 ambientColor = glm::vec3(m_light.ambient) * m_light.color * lighthouseAmbientMult;
         m_characterShader->setVec3("uAmbientColor", ambientColor);
-        uploadPointLight(m_characterShader);
+        uploadPointLights(m_characterShader);
         m_characterShader->setVec3("uCameraPos", m_camera->position());
         m_characterShader->setVec3("uSkyColor", skyColor);
         m_characterShader->setFloat("uFogStart", fogStart);
@@ -1985,7 +2121,7 @@ void Game::render(){
         float treeAmbientMult = m_isNightMode ? 0.25f : 0.5f;
         glm::vec3 ambientColor = glm::vec3(m_light.ambient) * m_light.color * treeAmbientMult;
         m_characterShader->setVec3("uAmbientColor", ambientColor);
-        uploadPointLight(m_characterShader);
+        uploadPointLights(m_characterShader);
         m_characterShader->setVec3("uCameraPos", m_camera->position());
         m_characterShader->setVec3("uSkyColor", skyColor);
         m_characterShader->setFloat("uFogStart", fogStart);
@@ -2031,7 +2167,7 @@ void Game::render(){
         float campfireAmbientMult = m_isNightMode ? 0.25f : 0.5f;
         glm::vec3 ambientColor = glm::vec3(m_light.ambient) * m_light.color * campfireAmbientMult;
         m_characterShader->setVec3("uAmbientColor", ambientColor);
-        uploadPointLight(m_characterShader);
+        uploadPointLights(m_characterShader);
         m_characterShader->setVec3("uCameraPos", m_camera->position());
         m_characterShader->setVec3("uSkyColor", skyColor);
         m_characterShader->setFloat("uFogStart", fogStart);
@@ -2045,6 +2181,40 @@ void Game::render(){
         glActiveTexture(GL_TEXTURE8);
         m_characterShader->setInt("uAlbedo", 8);
         for(const auto& part : m_campfireMesh.parts){
+            glBindTexture(GL_TEXTURE_2D, part.albedoTex);
+            glBindVertexArray(part.vao);
+            glDrawElements(GL_TRIANGLES, part.indexCount, GL_UNSIGNED_INT, 0);
+        }
+        glBindVertexArray(0);
+        glActiveTexture(GL_TEXTURE0);
+    }
+
+    // Render stick (world item or attached to character)
+    if(m_stickReady && m_characterShader && !m_stickMesh.parts.empty()){
+        m_characterShader->bind();
+        m_characterShader->setBool("uUseSkinning", false);
+        m_characterShader->setMat4("uModel", m_stickItem.worldMatrix);
+        m_characterShader->setMat4("uView", m_camera->viewMatrix());
+        m_characterShader->setMat4("uProj", m_camera->projectionMatrix());
+        m_characterShader->setVec3("uLightDir", m_light.direction);
+        m_characterShader->setVec3("uLightColor", m_light.color);
+        float stickAmbientMult = m_isNightMode ? 0.25f : 0.5f;
+        glm::vec3 stickAmbient = glm::vec3(m_light.ambient) * m_light.color * stickAmbientMult;
+        m_characterShader->setVec3("uAmbientColor", stickAmbient);
+        uploadPointLights(m_characterShader);
+        m_characterShader->setVec3("uCameraPos", m_camera->position());
+        m_characterShader->setVec3("uSkyColor", skyColor);
+        m_characterShader->setFloat("uFogStart", fogStart);
+        m_characterShader->setFloat("uFogRange", fogRange);
+        m_characterShader->setFloat("uSpecularStrength", m_light.specularStrength * 0.8f);
+        m_characterShader->setFloat("uShininess", m_light.shininess);
+        m_characterShader->setMat4("uLightSpace", lightSpace);
+        glActiveTexture(GL_TEXTURE9);
+        glBindTexture(GL_TEXTURE_2D, m_shadowTex);
+        m_characterShader->setInt("uShadowMap", 9);
+        glActiveTexture(GL_TEXTURE8);
+        m_characterShader->setInt("uAlbedo", 8);
+        for(const auto& part : m_stickMesh.parts){
             glBindTexture(GL_TEXTURE_2D, part.albedoTex);
             glBindVertexArray(part.vao);
             glDrawElements(GL_TRIANGLES, part.indexCount, GL_UNSIGNED_INT, 0);
@@ -2071,7 +2241,7 @@ void Game::render(){
         float hutAmbientMult = m_isNightMode ? 0.25f : 0.5f;
         glm::vec3 hutAmbient = glm::vec3(m_light.ambient) * m_light.color * hutAmbientMult;
         m_characterShader->setVec3("uAmbientColor", hutAmbient);
-        uploadPointLight(m_characterShader);
+        uploadPointLights(m_characterShader);
         m_characterShader->setVec3("uCameraPos", m_camera->position());
         m_characterShader->setVec3("uSkyColor", skyColor);
         m_characterShader->setFloat("uFogStart", fogStart);
@@ -2112,7 +2282,7 @@ void Game::render(){
         float grassAmbientMult = m_isNightMode ? 0.35f : 0.7f;
         glm::vec3 grassAmbient = m_light.color * m_light.ambient * grassAmbientMult;
         m_grassShader->setVec3("uAmbientColor", grassAmbient);
-        uploadPointLight(m_grassShader);
+        uploadPointLights(m_grassShader);
         glActiveTexture(GL_TEXTURE7);
         glBindTexture(GL_TEXTURE_2D, m_grassBillboardTex);
         m_grassShader->setInt("uGrassAtlas", 7);
@@ -2130,6 +2300,7 @@ void Game::render(){
         glm::mat4 view = m_camera->viewMatrix();
         glm::mat4 viewProj = m_camera->projectionMatrix() * view;
         renderFireParticles(viewProj, view);
+        renderStickFlame(viewProj, view);
     }
 
     // Render water
@@ -2144,7 +2315,7 @@ void Game::render(){
     m_waterShader->setFloat("uFogRange", fogRange);
     m_waterShader->setVec3("uLightDir", m_light.direction);
     m_waterShader->setVec3("uLightColor", m_light.color);
-    uploadPointLight(m_waterShader);
+    uploadPointLights(m_waterShader);
     // Provide light space and shadow map so water can receive scene shadows
     m_waterShader->setMat4("uLightSpace", lightSpace);
     glActiveTexture(GL_TEXTURE0);
@@ -2340,6 +2511,34 @@ void Game::initCampfireFireFX(){
     }
     uploadFireParticlesToGPU();
     m_fireFXReady = true;
+    initStickFlameBillboard();
+}
+
+void Game::initStickFlameBillboard(){
+    if(m_stickFlameReady || m_fireTexture == 0)
+        return;
+    if(m_stickFlameShader == nullptr){
+        m_stickFlameShader = new Shader();
+        if(!m_stickFlameShader->compile(kStickFlameVert, kStickFlameFrag)){
+            delete m_stickFlameShader;
+            m_stickFlameShader = nullptr;
+            return;
+        }
+    }
+    if(m_stickFlameVAO == 0){
+        glGenVertexArrays(1, &m_stickFlameVAO);
+        glBindVertexArray(m_stickFlameVAO);
+        glGenBuffers(1, &m_stickFlameVBO);
+        glBindBuffer(GL_ARRAY_BUFFER, m_stickFlameVBO);
+        glBufferData(GL_ARRAY_BUFFER, sizeof(float) * kFireQuadVertices.size(), kFireQuadVertices.data(), GL_STATIC_DRAW);
+        glEnableVertexAttribArray(0);
+        glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, sizeof(float) * 4, reinterpret_cast<void*>(0));
+        glEnableVertexAttribArray(1);
+        glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, sizeof(float) * 4, reinterpret_cast<void*>(sizeof(float) * 2));
+        glBindVertexArray(0);
+        glBindBuffer(GL_ARRAY_BUFFER, 0);
+    }
+    m_stickFlameReady = true;
 }
 
 void Game::respawnFireParticle(FireParticle& particle){
@@ -2419,6 +2618,37 @@ void Game::renderFireParticles(const glm::mat4& viewProj, const glm::mat4& view)
     glDisable(GL_BLEND);
 }
 
+void Game::renderStickFlame(const glm::mat4& viewProj, const glm::mat4& view){
+    if(!m_stickFlameReady || !m_stickFlameVisible || !m_stickFlameShader)
+        return;
+    glm::vec3 rawRight(view[0][0], view[1][0], view[2][0]);
+    glm::vec3 rawUp(view[0][1], view[1][1], view[2][1]);
+    if(glm::length2(rawRight) < 1e-6f) rawRight = glm::vec3(1.0f, 0.0f, 0.0f);
+    if(glm::length2(rawUp) < 1e-6f) rawUp = glm::vec3(0.0f, 1.0f, 0.0f);
+    glm::vec3 camRight = glm::normalize(rawRight);
+    glm::vec3 camUp = glm::normalize(rawUp);
+    float baseSize = 0.65f * m_stickItem.scale * 20.0f;
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE);
+    glDepthMask(GL_FALSE);
+    m_stickFlameShader->bind();
+    m_stickFlameShader->setMat4("uViewProj", viewProj);
+    m_stickFlameShader->setVec3("uWorldPos", m_stickFlamePos + glm::vec3(0.0f, 0.15f, 0.0f));
+    m_stickFlameShader->setVec3("uCameraRight", camRight);
+    m_stickFlameShader->setVec3("uCameraUp", camUp);
+    m_stickFlameShader->setFloat("uSize", baseSize);
+    m_stickFlameShader->setFloat("uGlow", 0.85f);
+    glActiveTexture(GL_TEXTURE16);
+    glBindTexture(GL_TEXTURE_2D, m_fireTexture);
+    m_stickFlameShader->setInt("uFlameTex", 16);
+    glBindVertexArray(m_stickFlameVAO);
+    glDrawArrays(GL_TRIANGLES, 0, kFireQuadVertexCount);
+    glBindVertexArray(0);
+    glDepthMask(GL_TRUE);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    glDisable(GL_BLEND);
+}
+
 void Game::updateCampfireLight(float dt){
     if(!m_campfireLight.enabled)
         return;
@@ -2446,6 +2676,10 @@ void Game::shutdown(){
     if(m_fireQuadVBO) { glDeleteBuffers(1, &m_fireQuadVBO); m_fireQuadVBO = 0; }
     if(m_fireVAO) { glDeleteVertexArrays(1, &m_fireVAO); m_fireVAO = 0; }
     delete m_fireShader; m_fireShader = nullptr;
+    if(m_stickFlameVBO) { glDeleteBuffers(1, &m_stickFlameVBO); m_stickFlameVBO = 0; }
+    if(m_stickFlameVAO) { glDeleteVertexArrays(1, &m_stickFlameVAO); m_stickFlameVAO = 0; }
+    delete m_stickFlameShader; m_stickFlameShader = nullptr;
+    m_stickFlameReady = false;
     m_fireFXReady = false;
     if(m_grassTexture) { glDeleteTextures(1, &m_grassTexture); m_grassTexture = 0; }
     if(m_texFungus) { glDeleteTextures(1, &m_texFungus); m_texFungus = 0; }
@@ -2647,6 +2881,218 @@ std::string Game::getRegionAtPosition(const glm::vec3& pos) const {
 void Game::renderRegionOverlay(){
     // This function is now integrated into the main render() function
     // Kept for API compatibility but does nothing
+}
+
+void Game::updateStickInteraction(){
+    if(!m_stickReady){
+        m_stickFlameVisible = false;
+        return;
+    }
+
+    // Ensure dropped stick hovers slightly above sampled terrain height
+    if(!m_stickItem.isHeld){
+        float terrainY = getTerrainHeightAt(m_stickItem.position.x, m_stickItem.position.z);
+        m_stickItem.position.y = terrainY + m_stickHoverOffset;
+    }
+
+    refreshStickWorldMatrix();
+
+    glm::vec3 stickTipWorld = getStickTipWorldPosition();
+    if(m_stickLit){
+        updateStickLight(stickTipWorld);
+        m_stickFlamePos = stickTipWorld;
+        m_stickFlameVisible = true;
+    } else {
+        m_stickLight.enabled = false;
+        m_stickFlameVisible = false;
+    }
+
+    if(!m_characterReady){
+        m_canIgniteStick = false;
+        return;
+    }
+
+    glm::vec2 stickXZ(m_stickItem.position.x, m_stickItem.position.z);
+    glm::vec2 playerXZ(m_characterController.position.x, m_characterController.position.z);
+    float planarDistance = glm::length(stickXZ - playerXZ);
+    m_canPickupStick = (!m_stickItem.isHeld && planarDistance <= m_stickItem.colliderRadius);
+
+    bool nearCampfire = false;
+    float tipDistance = -1.0f;
+    if(m_stickItem.isHeld && m_campfireReady && m_campfireLight.enabled){
+        tipDistance = glm::length(stickTipWorld - m_campfireEmitterPos);
+        nearCampfire = tipDistance <= m_stickIgniteRadius;
+    }
+    if(nearCampfire != m_wasStickNearCampfire){
+        if(nearCampfire){
+            std::cout << "[StickTorch] Tip within ignite radius: dist=" << tipDistance
+                      << ", radius=" << m_stickIgniteRadius << std::endl;
+        } else if(m_wasStickNearCampfire){
+            std::cout << "[StickTorch] Tip left ignite radius" << std::endl;
+        }
+        m_wasStickNearCampfire = nearCampfire;
+    }
+    m_canIgniteStick = nearCampfire && !m_stickLit;
+    if(m_canIgniteStick && !m_prevCanIgniteStick){
+        std::cout << "[StickTorch] Press E to ignite the torch" << std::endl;
+    } else if(!m_canIgniteStick && m_prevCanIgniteStick){
+        std::cout << "[StickTorch] Ignite prompt cleared" << std::endl;
+    }
+    m_prevCanIgniteStick = m_canIgniteStick;
+
+    GLFWwindow* window = g_windowPtr ? g_windowPtr->nativeHandle() : nullptr;
+    if(!window) return;
+
+    int keyState = glfwGetKey(window, GLFW_KEY_F);
+    if(keyState == GLFW_PRESS && !m_stickActionHeld){
+        if(m_canPickupStick){
+            attachStickToHand();
+        } else if(m_stickItem.isHeld){
+            dropStickToTerrain();
+        }
+        m_stickActionHeld = true;
+    } else if(keyState == GLFW_RELEASE){
+        m_stickActionHeld = false;
+    }
+
+    int igniteState = glfwGetKey(window, GLFW_KEY_E);
+    if(igniteState == GLFW_PRESS && !m_stickIgniteHeld){
+        if(m_canIgniteStick){
+            igniteStickTorch();
+        } else if(m_stickItem.isHeld){
+            if(tipDistance >= 0.0f){
+                std::cout << "[StickTorch] E pressed but tip distance " << tipDistance
+                          << " exceeds ignite radius " << m_stickIgniteRadius << std::endl;
+            } else {
+                std::cout << "[StickTorch] E pressed but campfire not available" << std::endl;
+            }
+        }
+        m_stickIgniteHeld = true;
+    } else if(igniteState == GLFW_RELEASE){
+        m_stickIgniteHeld = false;
+    }
+}
+
+void Game::refreshStickWorldMatrix(){
+    if(!m_stickReady) return;
+    if(m_stickItem.isHeld){
+        m_stickItem.worldMatrix = buildHeldStickMatrix();
+        m_stickItem.position = glm::vec3(m_stickItem.worldMatrix[3]);
+        return;
+    }
+    m_stickItem.worldMatrix = composeTransform(m_stickItem.position, m_stickItem.rotation, m_stickItem.scale);
+}
+
+void Game::attachStickToHand(){
+    if(!m_stickReady || !m_characterReady) return;
+    m_stickItem.isHeld = true;
+    m_stickItem.collisionEnabled = false;
+    refreshStickWorldMatrix();
+    std::cout << "[Game] Stick attached to right hand" << std::endl;
+}
+
+void Game::dropStickToTerrain(){
+    if(!m_stickReady) return;
+    glm::vec3 forward(std::sin(m_characterController.yaw), 0.0f, std::cos(m_characterController.yaw));
+    if(glm::length2(forward) < 1e-4f){
+        forward = glm::vec3(0.0f, 0.0f, -1.0f);
+    } else {
+        forward = glm::normalize(forward);
+    }
+    glm::vec3 dropPosition = m_characterController.position + forward * m_stickDropDistance;
+    float terrainY = getTerrainHeightAt(dropPosition.x, dropPosition.z); // Heightmap raycast
+    float baseOffset = m_stickBaseHeight * m_stickItem.scale;
+    dropPosition.y = terrainY + m_stickHoverOffset - baseOffset;
+    m_stickItem.position = dropPosition;
+    m_stickItem.rotation = m_stickGroundRotation;
+    m_stickItem.isHeld = false;
+    m_stickItem.collisionEnabled = true;
+    refreshStickWorldMatrix();
+    std::cout << "[Game] Stick dropped at (" << dropPosition.x << ", " << dropPosition.y
+              << ", " << dropPosition.z << ")" << std::endl;
+}
+
+glm::mat4 Game::buildHeldStickMatrix() const{
+    if(!m_stickReady) return glm::mat4(1.0f);
+    glm::quat characterOrientation = glm::angleAxis(m_characterController.yaw, glm::vec3(0.0f, 1.0f, 0.0f));
+
+    glm::vec3 anchor = m_characterController.position;
+    anchor.y += m_characterFeetOffset * m_characterScale; // lift from controller root to actual ground contact
+
+    glm::mat4 model(1.0f);
+    model = glm::translate(model, anchor);
+    model *= glm::mat4_cast(characterOrientation);
+    model = glm::translate(model, m_stickLocalOffset);
+
+    glm::mat4 holdRotation = glm::mat4(1.0f);
+    holdRotation = glm::rotate(holdRotation, glm::radians(m_stickHoldEuler.y), glm::vec3(0.0f, 1.0f, 0.0f));
+    holdRotation = glm::rotate(holdRotation, glm::radians(m_stickHoldEuler.x), glm::vec3(1.0f, 0.0f, 0.0f));
+    holdRotation = glm::rotate(holdRotation, glm::radians(m_stickHoldEuler.z), glm::vec3(0.0f, 0.0f, 1.0f));
+
+    glm::mat4 baseAlign = glm::translate(glm::mat4(1.0f), glm::vec3(0.0f, -m_stickBaseHeight, 0.0f));
+    glm::mat4 scaleMatrix = glm::scale(glm::mat4(1.0f), glm::vec3(m_stickItem.scale));
+
+    return model * holdRotation * scaleMatrix * baseAlign;
+}
+
+glm::vec3 Game::getStickTipWorldPosition() const{
+    if(!m_stickReady) return glm::vec3(0.0f);
+    float tipLength = glm::max(m_stickTipLength, 0.0f);
+    glm::vec4 localBase(0.0f, 0.0f, 0.0f, 1.0f);
+    glm::vec4 localTip(0.0f, tipLength, 0.0f, 1.0f);
+    glm::vec3 worldBase = glm::vec3(m_stickItem.worldMatrix * localBase);
+    glm::vec3 worldTip = glm::vec3(m_stickItem.worldMatrix * localTip);
+    glm::vec3 stickDir = worldTip - worldBase;
+    float dirLen = glm::length(stickDir);
+    if(dirLen < 1e-4f){
+        stickDir = glm::vec3(0.0f, 1.0f, 0.0f);
+    } else {
+        stickDir /= dirLen;
+    }
+
+    glm::vec3 adjustedTip = worldTip;
+    const float upShift = 20.2f;
+    const float forwardShift = -30.0f;
+    adjustedTip += glm::vec3(0.0f, upShift * m_stickItem.scale, 0.0f);
+    glm::vec3 horizontalDir = glm::vec3(stickDir.x, 0.0f, stickDir.z);
+    if(glm::length2(horizontalDir) > 1e-4f){
+        horizontalDir = glm::normalize(horizontalDir);
+        adjustedTip += horizontalDir * (forwardShift * m_stickItem.scale);
+    } else {
+        adjustedTip += stickDir * (forwardShift * m_stickItem.scale);
+    }
+    return adjustedTip;
+}
+
+void Game::igniteStickTorch(){
+    if(!m_stickReady || m_stickLit)
+        return;
+    initStickFlameBillboard();
+    m_stickLit = true;
+    m_stickLight.enabled = true;
+    if(m_stickLight.baseIntensity <= 0.0f){
+        m_stickLight.baseIntensity = 1.35f;
+    }
+    if(m_stickLight.radius <= 0.0f){
+        m_stickLight.radius = 18.0f;
+    }
+    m_stickLight.intensity = m_stickLight.baseIntensity;
+    m_stickLight.flickerTimer = 0.0f;
+    updateStickLight(getStickTipWorldPosition());
+    std::cout << "[Game] Stick ignited and is now a torch" << std::endl;
+}
+
+void Game::updateStickLight(const glm::vec3& tipWorldPos){
+    if(!m_stickLit){
+        m_stickLight.enabled = false;
+        return;
+    }
+    m_stickLight.enabled = true;
+    m_stickLight.position = tipWorldPos + glm::vec3(0.0f, 0.12f, 0.0f);
+    float dt = Time::delta();
+    m_stickLight.flickerTimer += dt * 4.5f;
+    float flicker = 0.85f + 0.15f * std::sin(m_stickLight.flickerTimer * 5.2f + std::sin(m_stickLight.flickerTimer * 1.7f));
+    m_stickLight.intensity = m_stickLight.baseIntensity * glm::clamp(flicker, 0.7f, 1.2f);
 }
 
 bool Game::loadStaticModel(const std::string& path, StaticMesh& outMesh){
