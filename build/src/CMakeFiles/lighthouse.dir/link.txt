@@ -1,0 +1,1 @@
+/usr/bin/c++ -O3 -DNDEBUG CMakeFiles/lighthouse.dir/main.cpp.o -o lighthouse  libengine.a ../_deps/glfw-build/src/libglfw3.a /usr/lib/x86_64-linux-gnu/librt.a -lm -ldl /usr/lib/x86_64-linux-gnu/libX11.so ../_deps/glad-build/libglad.a ../_deps/assimp-build/lib/libassimp.a ../_deps/assimp-build/contrib/zlib/libzlibstatic.a -lrt 
