@@ -2481,6 +2481,7 @@ src/CMakeFiles/engine.dir/character/ThirdPersonCamera.cpp.o
 src/CMakeFiles/engine.dir/core/Game.cpp.o
  /home/amri-fazlul/3D_world/src/core/Game.cpp
  /home/amri-fazlul/3D_world/build/_deps/assimp-build/include/assimp/config.h
+ /home/amri-fazlul/3D_world/build/_deps/assimp-src/include/assimp/Importer.hpp
  /home/amri-fazlul/3D_world/build/_deps/assimp-src/include/assimp/aabb.h
  /home/amri-fazlul/3D_world/build/_deps/assimp-src/include/assimp/anim.h
  /home/amri-fazlul/3D_world/build/_deps/assimp-src/include/assimp/camera.h
@@ -2492,6 +2493,7 @@ src/CMakeFiles/engine.dir/core/Game.cpp.o
  /home/amri-fazlul/3D_world/build/_deps/assimp-src/include/assimp/matrix4x4.h
  /home/amri-fazlul/3D_world/build/_deps/assimp-src/include/assimp/mesh.h
  /home/amri-fazlul/3D_world/build/_deps/assimp-src/include/assimp/metadata.h
+ /home/amri-fazlul/3D_world/build/_deps/assimp-src/include/assimp/postprocess.h
  /home/amri-fazlul/3D_world/build/_deps/assimp-src/include/assimp/quaternion.h
  /home/amri-fazlul/3D_world/build/_deps/assimp-src/include/assimp/scene.h
  /home/amri-fazlul/3D_world/build/_deps/assimp-src/include/assimp/texture.h
@@ -2714,8 +2716,6 @@ src/CMakeFiles/engine.dir/core/Game.cpp.o
  /home/amri-fazlul/3D_world/src/scene/TerrainSampler.h
  /home/amri-fazlul/3D_world/src/scene/Water.h
  /home/amri-fazlul/3D_world/src/systems/CollisionSystem.h
- /home/amri-fazlul/3D_world/src/systems/EnvironmentSystem.h
- /home/amri-fazlul/3D_world/src/systems/StaticPropSystem.h
  /usr/include/alloca.h
  /usr/include/asm-generic/errno-base.h
  /usr/include/asm-generic/errno.h

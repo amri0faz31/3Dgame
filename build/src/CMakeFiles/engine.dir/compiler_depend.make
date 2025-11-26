@@ -2471,6 +2471,7 @@ src/CMakeFiles/engine.dir/character/ThirdPersonCamera.cpp.o: /home/amri-fazlul/3
 
 src/CMakeFiles/engine.dir/core/Game.cpp.o: /home/amri-fazlul/3D_world/src/core/Game.cpp \
   _deps/assimp-build/include/assimp/config.h \
+  _deps/assimp-src/include/assimp/Importer.hpp \
   _deps/assimp-src/include/assimp/aabb.h \
   _deps/assimp-src/include/assimp/anim.h \
   _deps/assimp-src/include/assimp/camera.h \
@@ -2482,6 +2483,7 @@ src/CMakeFiles/engine.dir/core/Game.cpp.o: /home/amri-fazlul/3D_world/src/core/G
   _deps/assimp-src/include/assimp/matrix4x4.h \
   _deps/assimp-src/include/assimp/mesh.h \
   _deps/assimp-src/include/assimp/metadata.h \
+  _deps/assimp-src/include/assimp/postprocess.h \
   _deps/assimp-src/include/assimp/quaternion.h \
   _deps/assimp-src/include/assimp/scene.h \
   _deps/assimp-src/include/assimp/texture.h \
@@ -2704,8 +2706,6 @@ src/CMakeFiles/engine.dir/core/Game.cpp.o: /home/amri-fazlul/3D_world/src/core/G
   /home/amri-fazlul/3D_world/src/scene/TerrainSampler.h \
   /home/amri-fazlul/3D_world/src/scene/Water.h \
   /home/amri-fazlul/3D_world/src/systems/CollisionSystem.h \
-  /home/amri-fazlul/3D_world/src/systems/EnvironmentSystem.h \
-  /home/amri-fazlul/3D_world/src/systems/StaticPropSystem.h \
   /usr/include/alloca.h \
   /usr/include/asm-generic/errno-base.h \
   /usr/include/asm-generic/errno.h \
@@ -7465,8 +7465,6 @@ _deps/glm-src/glm/gtc/matrix_inverse.hpp:
 
 /usr/include/c++/13/backward/auto_ptr.h:
 
-/home/amri-fazlul/3D_world/src/systems/EnvironmentSystem.h:
-
 /home/amri-fazlul/3D_world/src/systems/CollisionSystem.h:
 
 /home/amri-fazlul/3D_world/src/scene/TerrainSampler.h:
@@ -8466,8 +8464,6 @@ _deps/glm-src/glm/detail/func_matrix.inl:
 _deps/glm-src/glm/detail/qualifier.hpp:
 
 /usr/include/c++/13/pstl/glue_numeric_defs.h:
-
-/home/amri-fazlul/3D_world/src/systems/StaticPropSystem.h:
 
 /usr/include/c++/13/concepts:
 

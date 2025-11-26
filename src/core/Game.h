@@ -8,6 +8,7 @@
 #include <glm/gtc/quaternion.hpp>
 #include <array>
 #include <memory>
+#include <vector>
 #include "character/CharacterImporter.h"
 #include "character/Animator.h"
 #include "character/ThirdPersonCamera.h"
@@ -109,14 +110,21 @@ private:
     
     // Static mesh structure (for non-animated models like lighthouse)
     struct StaticMesh {
-        unsigned int vao = 0;
-        unsigned int vbo = 0;
-        unsigned int ibo = 0;
-        unsigned int vertexCount = 0;
-        unsigned int indexCount = 0;
-        unsigned int albedoTex = 0;
+        struct Part {
+            unsigned int vao = 0;
+            unsigned int vbo = 0;
+            unsigned int ibo = 0;
+            unsigned int vertexCount = 0;
+            unsigned int indexCount = 0;
+            unsigned int albedoTex = 0;
+            glm::vec3 minBounds{0.0f};
+            glm::vec3 maxBounds{0.0f};
+        };
+        std::vector<Part> parts;
         glm::vec3 minBounds{0.0f};
         glm::vec3 maxBounds{0.0f};
+        unsigned int totalVertexCount = 0;
+        unsigned int totalIndexCount = 0;
     };
     
     // Lighthouse model
@@ -124,6 +132,30 @@ private:
     glm::vec3 m_lighthousePosition{0.0f};
     float m_lighthouseScale = 1.0f;
     bool m_lighthouseReady = false;
+    
+    struct TreeInstance {
+        glm::vec3 position{0.0f};
+        float scale = 1.0f;
+    };
+
+    // Tree model
+    StaticMesh m_treeMesh;
+    std::vector<TreeInstance> m_treeInstances;
+    bool m_treeReady = false;
+
+    // Campfire model
+    StaticMesh m_campfireMesh;
+    glm::vec3 m_campfirePosition{0.0f};
+    float m_campfireScale = 1.0f;
+    bool m_campfireReady = false;
+
+    // Forest hut model
+    StaticMesh m_forestHutMesh;
+    glm::vec3 m_forestHutPosition{0.0f};
+    float m_forestHutScale = 1.0f;
+    float m_forestHutYawDegrees = 0.0f;
+    float m_forestHutPitchDegrees = 0.0f;
+    bool m_forestHutReady = false;
     
     void initTerrainRegions();
     void renderRegionOverlay();

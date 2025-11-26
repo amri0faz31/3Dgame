@@ -946,6 +946,13 @@ bool Game::init(){
     m_waveNormalTex[1] = createWaveNormalTex(256, 6.5f, 1.2f);
     m_envCubemap = createEnvCubemap();
 
+    const glm::vec2 campfireClearingCenter(140.0f, 83.0f);
+    const float campfireClearingRadius = 14.0f;
+    const float campfireClearingRadiusSq = campfireClearingRadius * campfireClearingRadius;
+    const glm::vec2 forestHutClearingCenter(126.0f, 100.0f);
+    const float forestHutClearingRadius = 12.0f;
+    const float forestHutClearingRadiusSq = forestHutClearingRadius * forestHutClearingRadius;
+
     // Walk the terrain grid and emit grass patches wherever we are far enough above water
     auto generateGrassInstances = [&](){
         std::vector<glm::vec4> instances;
@@ -966,6 +973,15 @@ bool Game::init(){
                 float worldY = m_terrain->getHeight(worldX, worldZ);
                 // Skip grass if terrain is still within the shoreline buffer (prevents soggy fringe)
                 if(worldY < m_waterLevel + m_grassWaterGap){
+                    z -= spacing(rng);
+                    continue;
+                }
+                glm::vec2 horizontal(worldX, worldZ);
+                if(glm::length2(horizontal - campfireClearingCenter) < campfireClearingRadiusSq){
+                    z -= spacing(rng);
+                    continue;
+                }
+                if(glm::length2(horizontal - forestHutClearingCenter) < forestHutClearingRadiusSq){
                     z -= spacing(rng);
                     continue;
                 }
@@ -1118,10 +1134,194 @@ bool Game::init(){
                       << " to " << m_lighthouseMesh.maxBounds.y << "], feet offset: " << feetOffset << std::endl;
             std::cout << "[Game] Lighthouse scale: " << m_lighthouseScale 
                       << ", scaled height: " << (modelHeight * m_lighthouseScale) << " units"
-                      << ", vertices: " << m_lighthouseMesh.vertexCount << std::endl;
+                      << ", vertices: " << m_lighthouseMesh.totalVertexCount << std::endl;
         }
     } else {
         std::cerr << "[Game] Could not locate assets/models/light.glb" << std::endl;
+    }
+
+    // Load tree model
+    std::string treePath = resolveExistingPath({
+        "assets/models/tree1.glb",
+        "../assets/models/tree1.glb",
+        "../../assets/models/tree1.glb"
+    });
+    if(!treePath.empty()){
+        m_treeReady = loadStaticModel(treePath, m_treeMesh);
+        if(m_treeReady){
+            // Replace missing material with explicit diffuse texture so bark/leaves render correctly
+            if(GLuint treeTex = tryLoad("assets/textures/tree1_diffuse.png", 4, GL_RGBA)){
+                if(!m_treeMesh.parts.empty()){
+                    auto& part = m_treeMesh.parts.front();
+                    if(part.albedoTex){
+                        glDeleteTextures(1, &part.albedoTex);
+                        part.albedoTex = 0;
+                    }
+                    part.albedoTex = treeTex;
+                }
+            }
+
+            const float baseScale = 5.0f;
+            const std::array<float, 3> scaleMultipliers = {1.10f, 1.14f, 1.19f};
+            const float feetOffset = -m_treeMesh.minBounds.y;
+            const float modelHeight = m_treeMesh.maxBounds.y - m_treeMesh.minBounds.y;
+
+            auto computeTreePosition = [&](float x, float z, float scale){
+                float terrainY = m_terrain->getHeight(x, z);
+                return glm::vec3(x, terrainY + feetOffset * scale, z);
+            };
+
+            auto findRegion = [&](const std::string& name)->const TerrainRegion*{
+                auto it = std::find_if(m_terrainRegions.begin(), m_terrainRegions.end(), [&](const TerrainRegion& region){
+                    return region.name == name;
+                });
+                return it != m_terrainRegions.end() ? &(*it) : nullptr;
+            };
+
+            auto emitTreesInRegion = [&](const std::string& regionName, int desiredCount, std::mt19937& rng){
+                const TerrainRegion* region = findRegion(regionName);
+                if(!region || desiredCount <= 0) return;
+                std::uniform_real_distribution<float> distX(region->minXZ.x, region->maxXZ.x);
+                std::uniform_real_distribution<float> distZ(region->minXZ.y, region->maxXZ.y);
+                std::uniform_int_distribution<int> pickScale(0, static_cast<int>(scaleMultipliers.size()) - 1);
+                int attempts = 0;
+                const int maxAttempts = desiredCount * 32;
+                while(desiredCount > 0 && attempts < maxAttempts){
+                    float x = distX(rng);
+                    float z = distZ(rng);
+                    float terrainY = m_terrain->getHeight(x, z);
+                    if(terrainY < region->minY || terrainY > region->maxY){
+                        ++attempts;
+                        continue;
+                    }
+                    if(terrainY < m_waterLevel + m_grassWaterGap){
+                        ++attempts;
+                        continue;
+                    }
+                    float scale = baseScale * scaleMultipliers[pickScale(rng)];
+                    m_treeInstances.push_back({computeTreePosition(x, z, scale), scale});
+                    --desiredCount;
+                    ++attempts;
+                }
+                if(desiredCount > 0){
+                    std::cout << "[Game] Tree placement skipped " << desiredCount
+                              << " slots in region " << regionName << " (terrain constraints)" << std::endl;
+                }
+            };
+
+            m_treeInstances.clear();
+            m_treeInstances.reserve(80);
+
+            // Anchor tree in the southern center of the grass valley for easy visual reference
+            float anchorX = 0.0f;
+            float anchorZ = 128.0f;  // Midpoint of grassland_south strip (64..192)
+            glm::vec3 anchorPosition = computeTreePosition(anchorX, anchorZ, baseScale);
+            m_treeInstances.push_back({anchorPosition, baseScale});
+            float anchorTerrainY = m_terrain->getHeight(anchorX, anchorZ);
+
+            std::mt19937 treeRng(860321);
+            emitTreesInRegion("grassland_south", 35, treeRng);
+            emitTreesInRegion("grassland_center", 28, treeRng);
+            emitTreesInRegion("grassland_north", 12, treeRng);
+
+            if(m_treeInstances.empty()){
+                std::cerr << "[Game] No valid placement found for tree instances" << std::endl;
+                m_treeReady = false;
+            } else {
+                std::cout << "[Game] Tree bounds: Y [" << m_treeMesh.minBounds.y
+                          << " to " << m_treeMesh.maxBounds.y << "], feet offset: " << feetOffset << std::endl;
+                std::cout << "[Game] Tree base scale: " << baseScale
+                          << ", scaled height: " << (modelHeight * baseScale) << " units"
+                          << ", vertices: " << m_treeMesh.totalVertexCount << std::endl;
+                std::cout << "[Game] Anchor tree placed at (" << anchorX << ", " << anchorTerrainY
+                          << " (terrain), " << anchorZ << ")" << std::endl;
+                std::cout << "[Game] Spawned " << (m_treeInstances.size() - 1)
+                          << " additional tree instances across grassland regions" << std::endl;
+            }
+        }
+    } else {
+        std::cerr << "[Game] Could not locate assets/models/tree1.glb" << std::endl;
+    }
+
+    // Load campfire model
+    std::string campfirePath = resolveExistingPath({
+        "assets/models/campfire.glb",
+        "../assets/models/campfire.glb",
+        "../../assets/models/campfire.glb"
+    });
+    if(!campfirePath.empty()){
+        m_campfireReady = loadStaticModel(campfirePath, m_campfireMesh);
+        if(m_campfireReady){
+            m_campfireScale = 5.0f;
+            float campfireX = 140.0f;
+            float campfireZ = 83.0f;
+            float terrainY = m_terrain->getHeight(campfireX, campfireZ);
+            float feetOffset = -m_campfireMesh.minBounds.y;
+            float modelHeight = m_campfireMesh.maxBounds.y - m_campfireMesh.minBounds.y;
+            m_campfirePosition = glm::vec3(
+                campfireX,
+                terrainY + feetOffset * m_campfireScale,
+                campfireZ
+            );
+            std::cout << "[Game] Campfire loaded and placed at ("
+                      << campfireX << ", " << terrainY << " (terrain), " << campfireZ << ")" << std::endl;
+            std::cout << "[Game] Campfire bounds: Y [" << m_campfireMesh.minBounds.y
+                      << " to " << m_campfireMesh.maxBounds.y << "], feet offset: " << feetOffset << std::endl;
+            std::cout << "[Game] Campfire scale: " << m_campfireScale
+                      << ", scaled height: " << (modelHeight * m_campfireScale) << " units"
+                      << ", vertices: " << m_campfireMesh.totalVertexCount << std::endl;
+        }
+    } else {
+        std::cerr << "[Game] Could not locate assets/models/campfire.glb" << std::endl;
+    }
+
+    // Load forest hut model
+    std::string forestHutPath = resolveExistingPath({
+        "assets/models/forest_hut.glb",
+        "../assets/models/forest_hut.glb",
+        "../../assets/models/forest_hut.glb"
+    });
+    if(!forestHutPath.empty()){
+        m_forestHutReady = loadStaticModel(forestHutPath, m_forestHutMesh);
+        if(m_forestHutReady){
+            m_forestHutScale = 1.35f;
+            m_forestHutPitchDegrees = -90.0f;  // Convert Blender's Z-up export to engine's Y-up
+            float hutX = forestHutClearingCenter.x;
+            float hutZ = forestHutClearingCenter.y;
+            float terrainY = m_terrain->getHeight(hutX, hutZ);
+            float feetOffset = -m_forestHutMesh.minBounds.y;
+            float modelHeight = m_forestHutMesh.maxBounds.y - m_forestHutMesh.minBounds.y;
+            m_forestHutPosition = glm::vec3(
+                hutX,
+                terrainY + feetOffset * m_forestHutScale,
+                hutZ
+            );
+
+            glm::vec2 toCampfire(0.0f);
+            if(m_campfireReady){
+                toCampfire = glm::vec2(m_campfirePosition.x - hutX, m_campfirePosition.z - hutZ);
+            }
+            if(glm::length(toCampfire) > 0.0001f){
+                float yawRadians = std::atan2(toCampfire.x, toCampfire.y);
+                m_forestHutYawDegrees = glm::degrees(yawRadians);
+            } else {
+                m_forestHutYawDegrees = 0.0f;
+            }
+
+            std::cout << "[Game] Forest hut loaded from " << forestHutPath << std::endl;
+            std::cout << "[Game] Forest hut bounds: Y [" << m_forestHutMesh.minBounds.y
+                      << " to " << m_forestHutMesh.maxBounds.y << "], feet offset: " << feetOffset << std::endl;
+            std::cout << "[Game] Forest hut scale: " << m_forestHutScale
+                      << ", scaled height: " << (modelHeight * m_forestHutScale) << " units"
+                      << ", vertices: " << m_forestHutMesh.totalVertexCount << std::endl;
+            std::cout << "[Game] Forest hut placed at (" << hutX << ", " << terrainY
+                      << " (terrain), " << hutZ << ") yaw " << m_forestHutYawDegrees
+                      << " degrees to face the campfire" << std::endl;
+            std::cout << "[Game] Forest hut pitch correction: " << m_forestHutPitchDegrees
+                      << " degrees (Z-up -> Y-up)" << std::endl;
+        }
+    } else {
+        std::cerr << "[Game] Could not locate assets/models/forest_hut.glb" << std::endl;
     }
 
     // Enhanced sun lighting for professional outdoor look
@@ -1402,16 +1602,69 @@ void Game::render(){
     }
     
     // Draw lighthouse to shadow map
-    if(m_lighthouseReady){
+    if(m_lighthouseReady && !m_lighthouseMesh.parts.empty()){
         glm::mat4 lighthouseModel = glm::mat4(1.0f);
         lighthouseModel = glm::translate(lighthouseModel, m_lighthousePosition);
         lighthouseModel = glm::scale(lighthouseModel, glm::vec3(m_lighthouseScale));
-        
+
         m_depthShader->bind();
-        m_depthShader->setMat4("uModel", lighthouseModel);
         m_depthShader->setMat4("uLightSpace", lightSpace);
-        glBindVertexArray(m_lighthouseMesh.vao);
-        glDrawElements(GL_TRIANGLES, m_lighthouseMesh.indexCount, GL_UNSIGNED_INT, 0);
+        for(const auto& part : m_lighthouseMesh.parts){
+            m_depthShader->setMat4("uModel", lighthouseModel);
+            glBindVertexArray(part.vao);
+            glDrawElements(GL_TRIANGLES, part.indexCount, GL_UNSIGNED_INT, 0);
+        }
+        glBindVertexArray(0);
+    }
+
+    // Draw trees to shadow map
+    if(m_treeReady && !m_treeInstances.empty() && !m_treeMesh.parts.empty()){
+        m_depthShader->bind();
+        m_depthShader->setMat4("uLightSpace", lightSpace);
+        for(const TreeInstance& tree : m_treeInstances){
+            glm::mat4 treeModel = glm::mat4(1.0f);
+            treeModel = glm::translate(treeModel, tree.position);
+            treeModel = glm::scale(treeModel, glm::vec3(tree.scale));
+            m_depthShader->setMat4("uModel", treeModel);
+            for(const auto& part : m_treeMesh.parts){
+                glBindVertexArray(part.vao);
+                glDrawElements(GL_TRIANGLES, part.indexCount, GL_UNSIGNED_INT, 0);
+            }
+        }
+        glBindVertexArray(0);
+    }
+
+    // Draw campfire to shadow map
+    if(m_campfireReady && !m_campfireMesh.parts.empty()){
+        glm::mat4 campfireModel = glm::mat4(1.0f);
+        campfireModel = glm::translate(campfireModel, m_campfirePosition);
+        campfireModel = glm::scale(campfireModel, glm::vec3(m_campfireScale));
+
+        m_depthShader->bind();
+        m_depthShader->setMat4("uLightSpace", lightSpace);
+        m_depthShader->setMat4("uModel", campfireModel);
+        for(const auto& part : m_campfireMesh.parts){
+            glBindVertexArray(part.vao);
+            glDrawElements(GL_TRIANGLES, part.indexCount, GL_UNSIGNED_INT, 0);
+        }
+        glBindVertexArray(0);
+    }
+
+    // Draw forest hut to shadow map
+    if(m_forestHutReady && !m_forestHutMesh.parts.empty()){
+        glm::mat4 hutModel = glm::mat4(1.0f);
+        hutModel = glm::translate(hutModel, m_forestHutPosition);
+        hutModel = glm::rotate(hutModel, glm::radians(m_forestHutYawDegrees), glm::vec3(0.0f, 1.0f, 0.0f));
+        hutModel = glm::rotate(hutModel, glm::radians(m_forestHutPitchDegrees), glm::vec3(1.0f, 0.0f, 0.0f));
+        hutModel = glm::scale(hutModel, glm::vec3(m_forestHutScale));
+
+        m_depthShader->bind();
+        m_depthShader->setMat4("uLightSpace", lightSpace);
+        m_depthShader->setMat4("uModel", hutModel);
+        for(const auto& part : m_forestHutMesh.parts){
+            glBindVertexArray(part.vao);
+            glDrawElements(GL_TRIANGLES, part.indexCount, GL_UNSIGNED_INT, 0);
+        }
         glBindVertexArray(0);
     }
     
@@ -1504,7 +1757,7 @@ void Game::render(){
     }
 
     // Render lighthouse (static model)
-    if(m_lighthouseReady && m_characterShader){
+    if(m_lighthouseReady && m_characterShader && !m_lighthouseMesh.parts.empty()){
         glm::mat4 lighthouseModel = glm::mat4(1.0f);
         lighthouseModel = glm::translate(lighthouseModel, m_lighthousePosition);
         lighthouseModel = glm::scale(lighthouseModel, glm::vec3(m_lighthouseScale));
@@ -1531,10 +1784,128 @@ void Game::render(){
         glBindTexture(GL_TEXTURE_2D, m_shadowTex);
         m_characterShader->setInt("uShadowMap", 9);
         glActiveTexture(GL_TEXTURE8);
-        glBindTexture(GL_TEXTURE_2D, m_lighthouseMesh.albedoTex);
         m_characterShader->setInt("uAlbedo", 8);
-        glBindVertexArray(m_lighthouseMesh.vao);
-        glDrawElements(GL_TRIANGLES, m_lighthouseMesh.indexCount, GL_UNSIGNED_INT, 0);
+        for(const auto& part : m_lighthouseMesh.parts){
+            glBindTexture(GL_TEXTURE_2D, part.albedoTex);
+            glBindVertexArray(part.vao);
+            glDrawElements(GL_TRIANGLES, part.indexCount, GL_UNSIGNED_INT, 0);
+        }
+        glBindVertexArray(0);
+        glActiveTexture(GL_TEXTURE0);
+    }
+
+    // Render trees (static model instances)
+    if(m_treeReady && m_characterShader && !m_treeInstances.empty() && !m_treeMesh.parts.empty()){
+        m_characterShader->bind();
+        m_characterShader->setBool("uUseSkinning", false);
+        m_characterShader->setMat4("uView", m_camera->viewMatrix());
+        m_characterShader->setMat4("uProj", m_camera->projectionMatrix());
+        m_characterShader->setVec3("uLightDir", m_light.direction);
+        m_characterShader->setVec3("uLightColor", m_light.color);
+        float treeAmbientMult = m_isNightMode ? 0.25f : 0.5f;
+        glm::vec3 ambientColor = glm::vec3(m_light.ambient) * m_light.color * treeAmbientMult;
+        m_characterShader->setVec3("uAmbientColor", ambientColor);
+        m_characterShader->setVec3("uCameraPos", m_camera->position());
+        m_characterShader->setVec3("uSkyColor", skyColor);
+        m_characterShader->setFloat("uFogStart", fogStart);
+        m_characterShader->setFloat("uFogRange", fogRange);
+        m_characterShader->setFloat("uSpecularStrength", m_light.specularStrength * 0.8f);
+        m_characterShader->setFloat("uShininess", m_light.shininess);
+        m_characterShader->setMat4("uLightSpace", lightSpace);
+
+        glActiveTexture(GL_TEXTURE9);
+        glBindTexture(GL_TEXTURE_2D, m_shadowTex);
+        m_characterShader->setInt("uShadowMap", 9);
+        glActiveTexture(GL_TEXTURE8);
+        m_characterShader->setInt("uAlbedo", 8);
+
+        for(const TreeInstance& tree : m_treeInstances){
+            glm::mat4 treeModel = glm::mat4(1.0f);
+            treeModel = glm::translate(treeModel, tree.position);
+            treeModel = glm::scale(treeModel, glm::vec3(tree.scale));
+            m_characterShader->setMat4("uModel", treeModel);
+            for(const auto& part : m_treeMesh.parts){
+                glBindTexture(GL_TEXTURE_2D, part.albedoTex);
+                glBindVertexArray(part.vao);
+                glDrawElements(GL_TRIANGLES, part.indexCount, GL_UNSIGNED_INT, 0);
+            }
+        }
+        glBindVertexArray(0);
+        glActiveTexture(GL_TEXTURE0);
+    }
+
+    // Render campfire (static model)
+    if(m_campfireReady && m_characterShader && !m_campfireMesh.parts.empty()){
+        glm::mat4 campfireModel = glm::mat4(1.0f);
+        campfireModel = glm::translate(campfireModel, m_campfirePosition);
+        campfireModel = glm::scale(campfireModel, glm::vec3(m_campfireScale));
+
+        m_characterShader->bind();
+        m_characterShader->setBool("uUseSkinning", false);
+        m_characterShader->setMat4("uModel", campfireModel);
+        m_characterShader->setMat4("uView", m_camera->viewMatrix());
+        m_characterShader->setMat4("uProj", m_camera->projectionMatrix());
+        m_characterShader->setVec3("uLightDir", m_light.direction);
+        m_characterShader->setVec3("uLightColor", m_light.color);
+        float campfireAmbientMult = m_isNightMode ? 0.25f : 0.5f;
+        glm::vec3 ambientColor = glm::vec3(m_light.ambient) * m_light.color * campfireAmbientMult;
+        m_characterShader->setVec3("uAmbientColor", ambientColor);
+        m_characterShader->setVec3("uCameraPos", m_camera->position());
+        m_characterShader->setVec3("uSkyColor", skyColor);
+        m_characterShader->setFloat("uFogStart", fogStart);
+        m_characterShader->setFloat("uFogRange", fogRange);
+        m_characterShader->setFloat("uSpecularStrength", m_light.specularStrength * 0.8f);
+        m_characterShader->setFloat("uShininess", m_light.shininess);
+        m_characterShader->setMat4("uLightSpace", lightSpace);
+        glActiveTexture(GL_TEXTURE9);
+        glBindTexture(GL_TEXTURE_2D, m_shadowTex);
+        m_characterShader->setInt("uShadowMap", 9);
+        glActiveTexture(GL_TEXTURE8);
+        m_characterShader->setInt("uAlbedo", 8);
+        for(const auto& part : m_campfireMesh.parts){
+            glBindTexture(GL_TEXTURE_2D, part.albedoTex);
+            glBindVertexArray(part.vao);
+            glDrawElements(GL_TRIANGLES, part.indexCount, GL_UNSIGNED_INT, 0);
+        }
+        glBindVertexArray(0);
+        glActiveTexture(GL_TEXTURE0);
+    }
+
+    // Render forest hut (static model)
+    if(m_forestHutReady && m_characterShader && !m_forestHutMesh.parts.empty()){
+        glm::mat4 hutModel = glm::mat4(1.0f);
+        hutModel = glm::translate(hutModel, m_forestHutPosition);
+        hutModel = glm::rotate(hutModel, glm::radians(m_forestHutYawDegrees), glm::vec3(0.0f, 1.0f, 0.0f));
+        hutModel = glm::rotate(hutModel, glm::radians(m_forestHutPitchDegrees), glm::vec3(1.0f, 0.0f, 0.0f));
+        hutModel = glm::scale(hutModel, glm::vec3(m_forestHutScale));
+
+        m_characterShader->bind();
+        m_characterShader->setBool("uUseSkinning", false);
+        m_characterShader->setMat4("uModel", hutModel);
+        m_characterShader->setMat4("uView", m_camera->viewMatrix());
+        m_characterShader->setMat4("uProj", m_camera->projectionMatrix());
+        m_characterShader->setVec3("uLightDir", m_light.direction);
+        m_characterShader->setVec3("uLightColor", m_light.color);
+        float hutAmbientMult = m_isNightMode ? 0.25f : 0.5f;
+        glm::vec3 hutAmbient = glm::vec3(m_light.ambient) * m_light.color * hutAmbientMult;
+        m_characterShader->setVec3("uAmbientColor", hutAmbient);
+        m_characterShader->setVec3("uCameraPos", m_camera->position());
+        m_characterShader->setVec3("uSkyColor", skyColor);
+        m_characterShader->setFloat("uFogStart", fogStart);
+        m_characterShader->setFloat("uFogRange", fogRange);
+        m_characterShader->setFloat("uSpecularStrength", m_light.specularStrength * 0.8f);
+        m_characterShader->setFloat("uShininess", m_light.shininess);
+        m_characterShader->setMat4("uLightSpace", lightSpace);
+        glActiveTexture(GL_TEXTURE9);
+        glBindTexture(GL_TEXTURE_2D, m_shadowTex);
+        m_characterShader->setInt("uShadowMap", 9);
+        glActiveTexture(GL_TEXTURE8);
+        m_characterShader->setInt("uAlbedo", 8);
+        for(const auto& part : m_forestHutMesh.parts){
+            glBindTexture(GL_TEXTURE_2D, part.albedoTex);
+            glBindVertexArray(part.vao);
+            glDrawElements(GL_TRIANGLES, part.indexCount, GL_UNSIGNED_INT, 0);
+        }
         glBindVertexArray(0);
         glActiveTexture(GL_TEXTURE0);
     }
@@ -1752,11 +2123,23 @@ void Game::shutdown(){
     if(m_boneUBO){ glDeleteBuffers(1, &m_boneUBO); m_boneUBO = 0; }
     delete m_characterShader; m_characterShader = nullptr;
     m_animator.reset();
-    // Cleanup lighthouse
-    if(m_lighthouseMesh.vao){ glDeleteVertexArrays(1, &m_lighthouseMesh.vao); m_lighthouseMesh.vao = 0; }
-    if(m_lighthouseMesh.vbo){ glDeleteBuffers(1, &m_lighthouseMesh.vbo); m_lighthouseMesh.vbo = 0; }
-    if(m_lighthouseMesh.ibo){ glDeleteBuffers(1, &m_lighthouseMesh.ibo); m_lighthouseMesh.ibo = 0; }
-    if(m_lighthouseMesh.albedoTex){ glDeleteTextures(1, &m_lighthouseMesh.albedoTex); m_lighthouseMesh.albedoTex = 0; }
+    auto releaseStaticMesh = [](StaticMesh& mesh){
+        for(auto& part : mesh.parts){
+            if(part.vao){ glDeleteVertexArrays(1, &part.vao); part.vao = 0; }
+            if(part.vbo){ glDeleteBuffers(1, &part.vbo); part.vbo = 0; }
+            if(part.ibo){ glDeleteBuffers(1, &part.ibo); part.ibo = 0; }
+            if(part.albedoTex){ glDeleteTextures(1, &part.albedoTex); part.albedoTex = 0; }
+        }
+        mesh.parts.clear();
+        mesh.totalVertexCount = 0;
+        mesh.totalIndexCount = 0;
+        mesh.minBounds = glm::vec3(0.0f);
+        mesh.maxBounds = glm::vec3(0.0f);
+    };
+    releaseStaticMesh(m_lighthouseMesh);
+    releaseStaticMesh(m_treeMesh);
+    releaseStaticMesh(m_campfireMesh);
+    releaseStaticMesh(m_forestHutMesh);
     delete m_renderer; delete m_shader; delete m_waterShader; delete m_grassShader; delete m_camera; delete m_terrain; delete m_water; delete m_sky;
     m_grassShader = nullptr;
 }
@@ -1924,114 +2307,39 @@ void Game::renderRegionOverlay(){
 }
 
 bool Game::loadStaticModel(const std::string& path, StaticMesh& outMesh){
+    auto releaseParts = [](StaticMesh& mesh){
+        for(auto& part : mesh.parts){
+            if(part.vao){ glDeleteVertexArrays(1, &part.vao); part.vao = 0; }
+            if(part.vbo){ glDeleteBuffers(1, &part.vbo); part.vbo = 0; }
+            if(part.ibo){ glDeleteBuffers(1, &part.ibo); part.ibo = 0; }
+            if(part.albedoTex){ glDeleteTextures(1, &part.albedoTex); part.albedoTex = 0; }
+        }
+        mesh.parts.clear();
+        mesh.totalVertexCount = 0;
+        mesh.totalIndexCount = 0;
+        mesh.minBounds = glm::vec3(0.0f);
+        mesh.maxBounds = glm::vec3(0.0f);
+    };
+
+    releaseParts(outMesh);
+
     Assimp::Importer importer;
     const aiScene* scene = importer.ReadFile(path,
         aiProcess_Triangulate |
         aiProcess_GenNormals |
         aiProcess_FlipUVs |
         aiProcess_JoinIdenticalVertices);
-    
+
     if(!scene || scene->mFlags & AI_SCENE_FLAGS_INCOMPLETE || !scene->mRootNode){
         std::cerr << "[Game] Failed to load static model: " << path << " - " << importer.GetErrorString() << std::endl;
         return false;
     }
-    
-    // Simple loader - just get first mesh
+
     if(scene->mNumMeshes == 0){
         std::cerr << "[Game] No meshes found in " << path << std::endl;
         return false;
     }
-    
-    aiMesh* mesh = scene->mMeshes[0];
-    std::vector<float> vertices;
-    std::vector<unsigned int> indices;
-    
-    // Calculate bounding box from vertices
-    glm::vec3 minBounds(FLT_MAX);
-    glm::vec3 maxBounds(-FLT_MAX);
-    
-    // Extract vertex data (position, normal, uv)
-    for(unsigned int i = 0; i < mesh->mNumVertices; ++i){
-        // Position
-        float px = mesh->mVertices[i].x;
-        float py = mesh->mVertices[i].y;
-        float pz = mesh->mVertices[i].z;
-        
-        vertices.push_back(px);
-        vertices.push_back(py);
-        vertices.push_back(pz);
-        
-        // Update bounding box
-        minBounds.x = std::min(minBounds.x, px);
-        minBounds.y = std::min(minBounds.y, py);
-        minBounds.z = std::min(minBounds.z, pz);
-        maxBounds.x = std::max(maxBounds.x, px);
-        maxBounds.y = std::max(maxBounds.y, py);
-        maxBounds.z = std::max(maxBounds.z, pz);
-        
-        // Normal
-        if(mesh->HasNormals()){
-            vertices.push_back(mesh->mNormals[i].x);
-            vertices.push_back(mesh->mNormals[i].y);
-            vertices.push_back(mesh->mNormals[i].z);
-        } else {
-            vertices.push_back(0.0f);
-            vertices.push_back(1.0f);
-            vertices.push_back(0.0f);
-        }
-        
-        // UV
-        if(mesh->HasTextureCoords(0)){
-            vertices.push_back(mesh->mTextureCoords[0][i].x);
-            vertices.push_back(mesh->mTextureCoords[0][i].y);
-        } else {
-            vertices.push_back(0.0f);
-            vertices.push_back(0.0f);
-        }
-    }
-    
-    // Store bounding box in outMesh
-    outMesh.minBounds = minBounds;
-    outMesh.maxBounds = maxBounds;
-    
-    // Extract indices
-    for(unsigned int i = 0; i < mesh->mNumFaces; ++i){
-        aiFace& face = mesh->mFaces[i];
-        for(unsigned int j = 0; j < face.mNumIndices; ++j){
-            indices.push_back(face.mIndices[j]);
-        }
-    }
-    
-    // Create OpenGL buffers
-    glGenVertexArrays(1, &outMesh.vao);
-    glGenBuffers(1, &outMesh.vbo);
-    glGenBuffers(1, &outMesh.ibo);
-    
-    glBindVertexArray(outMesh.vao);
-    
-    glBindBuffer(GL_ARRAY_BUFFER, outMesh.vbo);
-    glBufferData(GL_ARRAY_BUFFER, vertices.size() * sizeof(float), vertices.data(), GL_STATIC_DRAW);
-    
-    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, outMesh.ibo);
-    glBufferData(GL_ELEMENT_ARRAY_BUFFER, indices.size() * sizeof(unsigned int), indices.data(), GL_STATIC_DRAW);
-    
-    // Position (location 0)
-    glEnableVertexAttribArray(0);
-    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 8 * sizeof(float), (void*)0);
-    
-    // Normal (location 1)
-    glEnableVertexAttribArray(1);
-    glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 8 * sizeof(float), (void*)(3 * sizeof(float)));
-    
-    // UV (location 2)
-    glEnableVertexAttribArray(2);
-    glVertexAttribPointer(2, 2, GL_FLOAT, GL_FALSE, 8 * sizeof(float), (void*)(6 * sizeof(float)));
-    
-    glBindVertexArray(0);
-    
-    outMesh.vertexCount = mesh->mNumVertices;
-    outMesh.indexCount = indices.size();
-    
+
     auto uploadTexture = [](const unsigned char* pixels, int w, int h)->GLuint{
         if(!pixels || w <= 0 || h <= 0) return 0u;
         GLuint tex = 0;
@@ -2045,90 +2353,195 @@ bool Game::loadStaticModel(const std::string& path, StaticMesh& outMesh){
         return tex;
     };
 
-    // Try to load texture
-    if(mesh->mMaterialIndex >= 0){
-        aiMaterial* material = scene->mMaterials[mesh->mMaterialIndex];
-        aiString texPath;
-        if(material->GetTexture(aiTextureType_DIFFUSE, 0, &texPath) == AI_SUCCESS){
-            bool loadedTexture = false;
-            std::string texName = texPath.C_Str();
-            if(!texName.empty() && texName[0] == '*'){
-                int embeddedIdx = -1;
-                try {
-                    embeddedIdx = std::stoi(texName.substr(1));
-                } catch(const std::exception&){
-                    embeddedIdx = -1;
-                }
-                if(embeddedIdx >= 0 && embeddedIdx < static_cast<int>(scene->mNumTextures)){
-                    aiTexture* embedded = scene->mTextures[embeddedIdx];
-                    if(embedded){
-                        if(embedded->mHeight == 0){
-                            int dataSize = embedded->mWidth;
-                            const unsigned char* bytes = reinterpret_cast<const unsigned char*>(embedded->pcData);
-                            int w=0,h=0,channels=0;
-                            unsigned char* decoded = stbi_load_from_memory(bytes, dataSize, &w, &h, &channels, 4);
-                            if(decoded){
-                                outMesh.albedoTex = uploadTexture(decoded, w, h);
-                                stbi_image_free(decoded);
-                                loadedTexture = outMesh.albedoTex != 0;
-                                if(loadedTexture){
-                                    std::cout << "[Game] Loaded embedded lighthouse texture (compressed) index " << embeddedIdx << std::endl;
-                                }
-                            } else {
-                                std::cerr << "[Game] Failed to decode embedded texture index " << embeddedIdx << std::endl;
-                            }
-                        } else {
-                            int w = embedded->mWidth;
-                            int h = embedded->mHeight;
-                            std::vector<unsigned char> pixels(w * h * 4);
-                            for(int i = 0; i < w * h; ++i){
-                                const aiTexel& texel = embedded->pcData[i];
-                                pixels[i * 4 + 0] = texel.r;
-                                pixels[i * 4 + 1] = texel.g;
-                                pixels[i * 4 + 2] = texel.b;
-                                pixels[i * 4 + 3] = texel.a;
-                            }
-                            outMesh.albedoTex = uploadTexture(pixels.data(), w, h);
-                            loadedTexture = outMesh.albedoTex != 0;
-                            if(loadedTexture){
-                                std::cout << "[Game] Loaded embedded lighthouse texture (raw) index " << embeddedIdx << std::endl;
-                            }
-                        }
-                    }
-                }
-            }
-
-            if(!loadedTexture){
-                std::string fullTexPath = path.substr(0, path.find_last_of("/\\") + 1) + texName;
-                int w=0, h=0, channels=0;
-                unsigned char* data = stbi_load(fullTexPath.c_str(), &w, &h, &channels, 4);
-                if(data){
-                    outMesh.albedoTex = uploadTexture(data, w, h);
-                    loadedTexture = outMesh.albedoTex != 0;
-                    stbi_image_free(data);
-                    if(loadedTexture){
-                        std::cout << "[Game] Loaded lighthouse texture: " << fullTexPath << std::endl;
-                    }
-                }
-            }
-        }
-    }
-    
-    // If no texture, create white texture
-    if(outMesh.albedoTex == 0){
-        glGenTextures(1, &outMesh.albedoTex);
-        glBindTexture(GL_TEXTURE_2D, outMesh.albedoTex);
+    auto createFallbackTexture = []()->GLuint{
+        GLuint tex = 0;
+        glGenTextures(1, &tex);
+        glBindTexture(GL_TEXTURE_2D, tex);
         unsigned char white[3] = {220, 220, 220};
         glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB8, 1, 1, 0, GL_RGB, GL_UNSIGNED_BYTE, white);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
         glGenerateMipmap(GL_TEXTURE_2D);
         glBindTexture(GL_TEXTURE_2D, 0);
+        return tex;
+    };
+
+    auto loadEmbeddedTexture = [&](const aiTexture* embedded)->GLuint{
+        if(!embedded) return 0u;
+        if(embedded->mHeight == 0){
+            int dataSize = embedded->mWidth;
+            const unsigned char* bytes = reinterpret_cast<const unsigned char*>(embedded->pcData);
+            int w=0,h=0,channels=0;
+            unsigned char* decoded = stbi_load_from_memory(bytes, dataSize, &w, &h, &channels, 4);
+            if(decoded){
+                GLuint tex = uploadTexture(decoded, w, h);
+                stbi_image_free(decoded);
+                return tex;
+            }
+            return 0u;
+        }
+        int w = embedded->mWidth;
+        int h = embedded->mHeight;
+        std::vector<unsigned char> pixels(w * h * 4);
+        for(int i = 0; i < w * h; ++i){
+            const aiTexel& texel = embedded->pcData[i];
+            pixels[i * 4 + 0] = texel.r;
+            pixels[i * 4 + 1] = texel.g;
+            pixels[i * 4 + 2] = texel.b;
+            pixels[i * 4 + 3] = texel.a;
+        }
+        return uploadTexture(pixels.data(), w, h);
+    };
+
+    std::string baseDir;
+    std::size_t slashPos = path.find_last_of("/\\");
+    if(slashPos != std::string::npos){
+        baseDir = path.substr(0, slashPos + 1);
     }
-    
-    std::cout << "[Game] Loaded static model: " << path << " (" 
-              << outMesh.vertexCount << " vertices, " 
-              << outMesh.indexCount << " indices)" << std::endl;
-    
+
+    for(unsigned int meshIdx = 0; meshIdx < scene->mNumMeshes; ++meshIdx){
+        aiMesh* mesh = scene->mMeshes[meshIdx];
+        StaticMesh::Part part;
+
+        std::vector<float> vertices;
+        vertices.reserve(mesh->mNumVertices * 8);
+        std::vector<unsigned int> indices;
+        indices.reserve(mesh->mNumFaces * 3);
+
+        glm::vec3 partMinBounds(FLT_MAX);
+        glm::vec3 partMaxBounds(-FLT_MAX);
+
+        for(unsigned int i = 0; i < mesh->mNumVertices; ++i){
+            float px = mesh->mVertices[i].x;
+            float py = mesh->mVertices[i].y;
+            float pz = mesh->mVertices[i].z;
+
+            vertices.push_back(px);
+            vertices.push_back(py);
+            vertices.push_back(pz);
+
+            partMinBounds.x = std::min(partMinBounds.x, px);
+            partMinBounds.y = std::min(partMinBounds.y, py);
+            partMinBounds.z = std::min(partMinBounds.z, pz);
+            partMaxBounds.x = std::max(partMaxBounds.x, px);
+            partMaxBounds.y = std::max(partMaxBounds.y, py);
+            partMaxBounds.z = std::max(partMaxBounds.z, pz);
+
+            if(mesh->HasNormals()){
+                vertices.push_back(mesh->mNormals[i].x);
+                vertices.push_back(mesh->mNormals[i].y);
+                vertices.push_back(mesh->mNormals[i].z);
+            } else {
+                vertices.push_back(0.0f);
+                vertices.push_back(1.0f);
+                vertices.push_back(0.0f);
+            }
+
+            if(mesh->HasTextureCoords(0)){
+                vertices.push_back(mesh->mTextureCoords[0][i].x);
+                vertices.push_back(mesh->mTextureCoords[0][i].y);
+            } else {
+                vertices.push_back(0.0f);
+                vertices.push_back(0.0f);
+            }
+        }
+
+        for(unsigned int i = 0; i < mesh->mNumFaces; ++i){
+            const aiFace& face = mesh->mFaces[i];
+            for(unsigned int j = 0; j < face.mNumIndices; ++j){
+                indices.push_back(face.mIndices[j]);
+            }
+        }
+
+        glGenVertexArrays(1, &part.vao);
+        glGenBuffers(1, &part.vbo);
+        glGenBuffers(1, &part.ibo);
+
+        glBindVertexArray(part.vao);
+        glBindBuffer(GL_ARRAY_BUFFER, part.vbo);
+        glBufferData(GL_ARRAY_BUFFER, vertices.size() * sizeof(float), vertices.data(), GL_STATIC_DRAW);
+        glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, part.ibo);
+        glBufferData(GL_ELEMENT_ARRAY_BUFFER, indices.size() * sizeof(unsigned int), indices.data(), GL_STATIC_DRAW);
+
+        glEnableVertexAttribArray(0);
+        glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 8 * sizeof(float), reinterpret_cast<void*>(0));
+        glEnableVertexAttribArray(1);
+        glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 8 * sizeof(float), reinterpret_cast<void*>(3 * sizeof(float)));
+        glEnableVertexAttribArray(2);
+        glVertexAttribPointer(2, 2, GL_FLOAT, GL_FALSE, 8 * sizeof(float), reinterpret_cast<void*>(6 * sizeof(float)));
+        glBindVertexArray(0);
+
+        part.vertexCount = mesh->mNumVertices;
+        part.indexCount = static_cast<unsigned int>(indices.size());
+        part.minBounds = partMinBounds;
+        part.maxBounds = partMaxBounds;
+
+        GLuint textureHandle = 0;
+        if(mesh->mMaterialIndex >= 0){
+            aiMaterial* material = scene->mMaterials[mesh->mMaterialIndex];
+            aiString texPath;
+            if(material->GetTexture(aiTextureType_DIFFUSE, 0, &texPath) == AI_SUCCESS){
+                std::string texName = texPath.C_Str();
+                if(!texName.empty() && texName[0] == '*'){
+                    int embeddedIdx = -1;
+                    try {
+                        embeddedIdx = std::stoi(texName.substr(1));
+                    } catch(const std::exception&){
+                        embeddedIdx = -1;
+                    }
+                    if(embeddedIdx >= 0 && embeddedIdx < static_cast<int>(scene->mNumTextures)){
+                        textureHandle = loadEmbeddedTexture(scene->mTextures[embeddedIdx]);
+                        if(textureHandle != 0){
+                            std::cout << "[Game] Loaded embedded static texture index " << embeddedIdx
+                                      << " for mesh part " << meshIdx << std::endl;
+                        }
+                    }
+                } else if(!texName.empty()){
+                    std::vector<std::string> candidates;
+                    if(!baseDir.empty()) candidates.emplace_back(baseDir + texName);
+                    candidates.emplace_back(texName);
+                    if(!baseDir.empty()){
+                        candidates.emplace_back(baseDir + "../" + texName);
+                        candidates.emplace_back(baseDir + "../../" + texName);
+                    }
+                    int w=0, h=0, channels=0;
+                    for(const std::string& candidate : candidates){
+                        unsigned char* data = stbi_load(candidate.c_str(), &w, &h, &channels, 4);
+                        if(!data) continue;
+                        textureHandle = uploadTexture(data, w, h);
+                        stbi_image_free(data);
+                        if(textureHandle != 0){
+                            std::cout << "[Game] Loaded static model texture: " << candidate
+                                      << " for mesh part " << meshIdx << std::endl;
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+
+        if(textureHandle == 0){
+            textureHandle = createFallbackTexture();
+        }
+
+        part.albedoTex = textureHandle;
+
+        outMesh.totalVertexCount += part.vertexCount;
+        outMesh.totalIndexCount += part.indexCount;
+        if(outMesh.parts.empty()){
+            outMesh.minBounds = part.minBounds;
+            outMesh.maxBounds = part.maxBounds;
+        } else {
+            outMesh.minBounds = glm::min(outMesh.minBounds, part.minBounds);
+            outMesh.maxBounds = glm::max(outMesh.maxBounds, part.maxBounds);
+        }
+
+        outMesh.parts.push_back(std::move(part));
+    }
+
+    std::cout << "[Game] Loaded static model: " << path << " ("
+              << outMesh.totalVertexCount << " vertices across "
+              << outMesh.parts.size() << " mesh parts)" << std::endl;
+
     return true;
 }
