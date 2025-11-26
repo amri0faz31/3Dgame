@@ -9,10 +9,14 @@
 #include <array>
 #include <memory>
 #include <vector>
+#include <random>
 #include "character/CharacterImporter.h"
 #include "character/Animator.h"
 #include "character/ThirdPersonCamera.h"
 #include "systems/CollisionSystem.h"
+#include "systems/InteractionSystem.h"
+#include "systems/MonsterAI.h"
+#include "audio/AudioSystem.h"
 class Game {
 public:
     // init(): Set up subsystems & load initial assets.
@@ -52,6 +56,15 @@ private:
         float specularStrength = 0.5f;
         float shininess = 32.f;
     } m_light;
+    struct PointLight {
+        glm::vec3 position{0.0f};
+        glm::vec3 color{1.0f};
+        float baseIntensity = 1.0f;
+        float intensity = 1.0f;
+        float radius = 20.0f;
+        bool enabled = false;
+        float flickerTimer = 0.0f;
+    } m_campfireLight;
     // Procedural grass texture (GL handle)
     unsigned int m_grassTexture = 0;
     unsigned int m_texFungus = 0;
@@ -64,6 +77,30 @@ private:
     unsigned int m_grassVBO = 0;
     unsigned int m_grassBillboardTex = 0;
     int m_grassPatchCount = 0;
+    class Shader* m_fireShader = nullptr;
+    unsigned int m_fireVAO = 0;
+    unsigned int m_fireQuadVBO = 0;
+    unsigned int m_fireInstanceVBO = 0;
+    unsigned int m_fireTexture = 0;
+    struct FireParticle {
+        glm::vec3 position{0.0f};
+        glm::vec3 velocity{0.0f, 1.0f, 0.0f};
+        float life = 0.0f;
+        float maxLife = 1.0f;
+        float size = 1.0f;
+        float seed = 0.0f;
+    };
+    std::vector<FireParticle> m_fireParticles;
+    std::mt19937 m_fireRng{12345};
+    glm::vec3 m_campfireEmitterPos{0.0f};
+    bool m_fireFXReady = false;
+    void initCampfireFireFX();
+    void respawnFireParticle(FireParticle& particle);
+    void updateFireParticles(float dt);
+    void uploadFireParticlesToGPU();
+    void renderFireParticles(const glm::mat4& viewProj, const glm::mat4& viewMatrix);
+    void updateCampfireLight(float dt);
+
     float m_waterLevel = 10.0f;
     float m_grassWaterGap = 6.0f; // keep grass at least 6 units above water plane
 
@@ -156,9 +193,44 @@ private:
     float m_forestHutYawDegrees = 0.0f;
     float m_forestHutPitchDegrees = 0.0f;
     bool m_forestHutReady = false;
+
+    // New systems for gameplay
+    AudioSystem m_audio;
+    InteractionSystem m_interactions;
+    MonsterAI m_monster;
+    
+    // Game state
+    bool m_hasNote = false;
+    bool m_hasTorch = false;
+    bool m_torchLit = false;
+    bool m_reachedLighthouse = false;
+    bool m_gameLost = false;
+    float m_beaconRotation = 0.0f;
+    int m_nearestInteractableID = -1;
+    
+    // Audio sources
+    int m_soundOcean = -1;
+    int m_soundFire = -1;
+    int m_soundWind = -1;
+    int m_soundPickup = -1;
+    int m_soundMonster = -1;
+    
+    // Monster model
+    StaticMesh m_monsterMesh;
+    bool m_monsterReady = false;
+
+    void setupCampfireLight();
+    void setupGameplayElements();
+    void updateGameplay(float dt);
+    void checkInteractions();
+    void onNotePickup();
+    void onTorchPickup();
+    void onTorchLight();
+    void checkMonsterDetection();
     
     void initTerrainRegions();
     void renderRegionOverlay();
+    void renderUI();
     std::string getRegionAtPosition(const glm::vec3& pos) const;
     bool loadStaticModel(const std::string& path, StaticMesh& outMesh);
 };

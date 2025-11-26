@@ -43,6 +43,17 @@ extern Window* g_windowPtr; // declared in main for access
 
 namespace {
 constexpr size_t kMaxBones = 128;
+constexpr int kMaxFireParticles = 96;
+constexpr int kFireQuadVertexCount = 6;
+constexpr std::array<float, kFireQuadVertexCount * 4> kFireQuadVertices = {
+    // corner.x, corner.y, u, v
+    -0.5f, -0.5f, 0.0f, 1.0f,
+     0.5f, -0.5f, 1.0f, 1.0f,
+     0.5f,  0.5f, 1.0f, 0.0f,
+    -0.5f, -0.5f, 0.0f, 1.0f,
+     0.5f,  0.5f, 1.0f, 0.0f,
+    -0.5f,  0.5f, 0.0f, 0.0f
+};
 
 std::string loadTextFile(const std::vector<std::string>& candidates){
     for(const auto& path : candidates){
@@ -138,6 +149,11 @@ uniform sampler2D uTexRocks;
 uniform sampler2D uShadowMap;
 uniform mat4 uLightSpace;
 uniform vec3 uSkyColor; uniform float uFogStart; uniform float uFogRange;
+uniform bool uPointLightEnabled;
+uniform vec3 uPointLightPos;
+uniform vec3 uPointLightColor;
+uniform float uPointLightIntensity;
+uniform float uPointLightRadius;
 
 // Base terrain palette: light green, dark green, and light brown
 const vec3 lightGreen  = vec3(0.35, 0.80, 0.30);
@@ -146,11 +162,16 @@ const vec3 lightBrown  = vec3(0.48, 0.37, 0.28);
 
 void main(){
     vec3 n = normalize(vNormal);
+    // Subtle procedural detail to avoid perfectly smooth hills; keeps lighting lively without fake glow
+    vec3 detailNormal = vec3(
+        sin(vWorldPos.x * 0.35),
+        0.0,
+        cos(vWorldPos.z * 0.35)
+    ) * 0.03;
+    n = normalize(n + detailNormal);
     vec3 L = normalize(-uLightDir);
     vec3 V = normalize(uCameraPos - vWorldPos);
     vec3 H = normalize(L + V);
-    
-    float diff = max(dot(n, L), 0.0);
 
     // Compute steepness (0 = flat, 1 = vertical)
     float steepness = clamp(1.0 - n.y, 0.0, 1.0);
@@ -212,8 +233,8 @@ void main(){
         }
         shadow = samples / count;
     }
-    // Shadow factor reduces lighting (1 = fully in shadow)
-    float shadowFactor = mix(1.0, 0.30, shadow);  // Darker shadows
+    // Convert to direct-light multiplier (0 = fully shadowed, 1 = fully lit)
+    float shadowFactor = clamp(1.0 - shadow, 0.05, 1.0);
 
     // Height-based tint: higher areas get a light-brown tint (e.g., sparse vegetation / plateau)
     float heightFactor = clamp(vWorldPos.y / uHeightScale, 0.0, 1.0);
@@ -239,6 +260,11 @@ void main(){
     // Very subtle rim lighting for depth perception
     float rim = pow(1.0 - NdotV, 3.0) * 0.04 * NdotL;
 
+    // Night-specific suppression so terrain reflections nearly disappear
+    float nightSpecScale = uIsNight ? 0.04 : 1.0;
+    spec *= nightSpecScale;
+    rim *= nightSpecScale;
+
     // Realistic ambient lighting (much weaker, modulated by AO and shadows)
     // Ambient should be minimal - most light comes from diffuse calculation
     // Night uses 0.15x multiplier (85% reduction), day uses 0.4x (60% reduction)
@@ -249,18 +275,32 @@ void main(){
     // This properly calculates light based on surface angle to light source
     vec3 diffuse = base * NdotL * uLightColor * shadowFactor;
     
-    // Shadows also affect ambient slightly (shadowed areas get even less ambient)
-    ambient *= mix(0.5, 1.0, shadowFactor);
-    
     vec3 specular = spec * uLightColor * shadowFactor;
     vec3 rimLight = rim * uLightColor * shadowFactor;
     
     vec3 color = ambient + diffuse + specular + rimLight;
+
+    if(uPointLightEnabled){
+        vec3 toLight = uPointLightPos - vWorldPos;
+        float distPoint = length(toLight);
+        if(distPoint < uPointLightRadius){
+            vec3 pointDir = normalize(toLight);
+            float attenuation = 1.0 - distPoint / uPointLightRadius;
+            attenuation = attenuation * attenuation;
+            float pointDiffuseN = max(dot(n, pointDir), 0.0);
+            if(pointDiffuseN > 0.0){
+                vec3 pointColor = uPointLightColor * uPointLightIntensity;
+                vec3 pointDiffuse = base * pointDiffuseN * pointColor;
+                float pointSpecPow = pow(max(dot(n, normalize(pointDir + V)), 0.0), uShininess);
+                float pointSpecStrength = pointSpecPow * uSpecularStrength * nightSpecScale;
+                vec3 pointSpec = pointSpecStrength * pointColor;
+                color += (pointDiffuse + pointSpec) * attenuation;
+            }
+        }
+    }
     
     // Linear fog based on distance to camera (start/range) for controlled blending
-    float dist = length(vWorldPos - uCameraPos);
-    float fogFactor = clamp((dist - uFogStart) / uFogRange, 0.0, 1.0);
-    color = mix(color, uSkyColor, fogFactor);
+    // Fog disabled; keep terrain color untouched by distance-based blending
     
     // Simple gamma correction
     color = pow(color, vec3(1.0/2.2));
@@ -334,6 +374,11 @@ uniform vec3 uCameraPos;
 uniform vec3 uLightDir;
 uniform vec3 uLightColor;
 uniform vec3 uSkyColor;
+uniform bool uPointLightEnabled;
+uniform vec3 uPointLightPos;
+uniform vec3 uPointLightColor;
+uniform float uPointLightIntensity;
+uniform float uPointLightRadius;
 uniform float uFogStart;
 uniform float uFogRange;
 uniform sampler2D uWaveNormal0;
@@ -408,8 +453,26 @@ void main(){
     // Combine lighting: base water color + diffuse + specular highlight
     vec3 color = waterColor * (0.85 + diff * 0.15) * shadow + spec * uLightColor * shadow;
 
-    float dist = length(uCameraPos - fs_in.worldPos);
-    color = mix(color, uSkyColor, clamp((dist - uFogStart) / uFogRange, 0.0, 1.0));
+    if(uPointLightEnabled){
+        vec3 toLight = uPointLightPos - fs_in.worldPos;
+        float distPoint = length(toLight);
+        if(distPoint < uPointLightRadius){
+            vec3 pointDir = normalize(toLight);
+            float attenuation = 1.0 - distPoint / uPointLightRadius;
+            attenuation *= attenuation;
+            float nDotPoint = max(dot(n, pointDir), 0.0);
+            if(nDotPoint > 0.0){
+                vec3 pointColor = uPointLightColor * uPointLightIntensity;
+                vec3 pointDiffuse = waterColor * nDotPoint * pointColor;
+                vec3 HPoint = normalize(pointDir + V);
+                float pointSpec = pow(max(dot(n, HPoint), 0.0), 192.0);
+                vec3 pointSpecular = pointSpec * pointColor * 0.5;
+                color += (pointDiffuse + pointSpecular) * attenuation;
+            }
+        }
+    }
+
+    // Fog disabled; water retains full color at all distances
 
     float depthAlpha = mix(0.98, 0.78, depth);
     float alpha = mix(depthAlpha, 1.0, foamMask * 0.15);
@@ -437,6 +500,7 @@ float shadowFactor(vec4 lightSpacePos){
     }
     return sum / float(samples);
 }
+
 )GLSL";
 
 static const char* kGrassVertex = R"GLSL(
@@ -565,38 +629,105 @@ uniform float uAlphaCutoff;
 uniform vec3 uLightDir;
 uniform vec3 uLightColor;
 uniform vec3 uAmbientColor;
+uniform bool uPointLightEnabled;
+uniform vec3 uPointLightPos;
+uniform vec3 uPointLightColor;
+uniform float uPointLightIntensity;
+uniform float uPointLightRadius;
 
 float getShadow() {
     vec3 proj = fs_in.lightSpacePos.xyz / fs_in.lightSpacePos.w;
     vec2 uv = proj.xy * 0.5 + 0.5;
     float currentDepth = proj.z * 0.5 + 0.5;
     if(uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0) return 1.0;
-    
-    float closestDepth = texture(uShadowMap, uv).r;
-    float bias = 0.002;
-    return currentDepth - bias > closestDepth ? 0.5 : 1.0;
+
+    float bias = 0.0025;
+    float occlusion = 0.0;
+    vec2 texelSize = vec2(1.0 / 1024.0);
+    for(int x = -1; x <= 1; ++x){
+        for(int y = -1; y <= 1; ++y){
+            vec2 offset = vec2(x, y) * texelSize;
+            float sampleDepth = texture(uShadowMap, uv + offset).r;
+            if(currentDepth - bias > sampleDepth){
+                occlusion += 1.0;
+            }
+        }
+    }
+    occlusion /= 9.0;
+    return clamp(1.0 - occlusion, 0.0, 1.0);
 }
 
 void main(){
     vec4 tex = texture(uGrassAtlas, fs_in.uv);
     if(tex.a < uAlphaCutoff) discard;
-    
-    // Better lighting with normal approximation
-    vec3 grassNormal = vec3(0.0, 0.8, 0.2);  // Slight upward tilt
-    float diffuse = max(dot(grassNormal, normalize(-uLightDir)), 0.0);
-    
-    // Subsurface scattering approximation for translucent grass
-    float backlight = max(dot(grassNormal, normalize(uLightDir)), 0.0) * 0.4;
-    
-    float shadow = getShadow();
+
+    vec3 normal = normalize(vec3(0.0, 1.0, 0.25));
+    vec3 lightDir = normalize(-uLightDir);
+    float NdotL = max(dot(normal, lightDir), 0.0);
+    float shadowFactor = getShadow();
+
     vec3 ambient = tex.rgb * uAmbientColor;
-    vec3 direct = tex.rgb * (diffuse + backlight) * uLightColor * shadow;
-    
-    vec3 lit = ambient + direct;
-    // Slight color shift for realism
+    vec3 diffuse = tex.rgb * NdotL * uLightColor * shadowFactor;
+
+    if(uPointLightEnabled){
+        vec3 toLight = uPointLightPos - fs_in.worldPos;
+        float dist = length(toLight);
+        if(dist < uPointLightRadius){
+            vec3 pointDir = normalize(toLight);
+            float pointDiffuse = max(dot(normal, pointDir), 0.0);
+            if(pointDiffuse > 0.0){
+                float attenuation = 1.0 - dist / uPointLightRadius;
+                attenuation *= attenuation;
+                vec3 pointColor = uPointLightColor * uPointLightIntensity;
+                diffuse += tex.rgb * pointDiffuse * pointColor * attenuation;
+            }
+        }
+    }
+
+    vec3 lit = ambient + diffuse;
     lit = mix(lit, vec3(0.92, 1.0, 0.88), 0.12);
-    
+
     FragColor = vec4(lit, tex.a);
+}
+)GLSL";
+
+static const char* kFireParticleVert = R"GLSL(
+#version 450 core
+layout(location=0) in vec2 aCorner;    // quad corner (-0.5..0.5)
+layout(location=1) in vec2 aUV;
+layout(location=2) in vec4 aPosSize;   // xyz world position, w size
+layout(location=3) in vec2 aLifeSeed;  // x life ratio, y seed
+uniform mat4 uViewProj;
+uniform vec3 uCameraRight;
+uniform vec3 uCameraUp;
+out vec2 vUV;
+out float vLife;
+void main(){
+    vec3 offset = (uCameraRight * aCorner.x + uCameraUp * aCorner.y) * aPosSize.w;
+    vec3 worldPos = aPosSize.xyz + offset;
+    gl_Position = uViewProj * vec4(worldPos, 1.0);
+    vUV = aUV;
+    vLife = clamp(aLifeSeed.x, 0.0, 1.0);
+}
+)GLSL";
+
+static const char* kFireParticleFrag = R"GLSL(
+#version 450 core
+in vec2 vUV;
+in float vLife;
+out vec4 FragColor;
+uniform sampler2D uFireTex;
+void main(){
+    vec4 texSample = texture(uFireTex, vUV);
+    if(texSample.a < 0.05) discard;
+    float life = clamp(vLife, 0.0, 1.0);
+    vec3 startCol = vec3(1.0, 0.98, 0.9);
+    vec3 midCol = vec3(1.0, 0.82, 0.35);
+    vec3 endCol = vec3(1.0, 0.38, 0.05);
+    vec3 color = mix(startCol, midCol, life);
+    color = mix(color, endCol, life * life);
+    float alpha = texSample.a * (1.0 - life);
+    FragColor = vec4(color * texSample.rgb, alpha);
 }
 )GLSL";
 
@@ -1263,6 +1394,16 @@ bool Game::init(){
                 terrainY + feetOffset * m_campfireScale,
                 campfireZ
             );
+            m_campfireEmitterPos = m_campfirePosition + glm::vec3(0.0f, 0.5f * m_campfireScale, 0.0f);
+            setupCampfireLight();
+            if(m_fireTexture == 0){
+                m_fireTexture = tryLoad("assets/textures/fire1.png", 4, GL_RGBA);
+                if(m_fireTexture == 0){
+                    std::cout << "[Game] Using fallback fire texture" << std::endl;
+                    m_fireTexture = createSolidTexture(255, 170, 80);
+                }
+            }
+            initCampfireFireFX();
             std::cout << "[Game] Campfire loaded and placed at ("
                       << campfireX << ", " << terrainY << " (terrain), " << campfireZ << ")" << std::endl;
             std::cout << "[Game] Campfire bounds: Y [" << m_campfireMesh.minBounds.y
@@ -1273,6 +1414,7 @@ bool Game::init(){
         }
     } else {
         std::cerr << "[Game] Could not locate assets/models/campfire.glb" << std::endl;
+        m_campfireLight.enabled = false;
     }
 
     // Load forest hut model
@@ -1284,16 +1426,34 @@ bool Game::init(){
     if(!forestHutPath.empty()){
         m_forestHutReady = loadStaticModel(forestHutPath, m_forestHutMesh);
         if(m_forestHutReady){
-            m_forestHutScale = 1.35f;
+            m_forestHutScale = 3.4f;
             m_forestHutPitchDegrees = -90.0f;  // Convert Blender's Z-up export to engine's Y-up
             float hutX = forestHutClearingCenter.x;
             float hutZ = forestHutClearingCenter.y;
             float terrainY = m_terrain->getHeight(hutX, hutZ);
-            float feetOffset = -m_forestHutMesh.minBounds.y;
+            float rotatedFeetOffset = 0.0f;
+            {
+                glm::vec3 minB = m_forestHutMesh.minBounds;
+                glm::vec3 maxB = m_forestHutMesh.maxBounds;
+                float minY = FLT_MAX;
+                glm::mat4 pitchMat = glm::rotate(glm::mat4(1.0f), glm::radians(m_forestHutPitchDegrees), glm::vec3(1.0f, 0.0f, 0.0f));
+                for(int ix = 0; ix < 2; ++ix){
+                    float x = ix == 0 ? minB.x : maxB.x;
+                    for(int iy = 0; iy < 2; ++iy){
+                        float y = iy == 0 ? minB.y : maxB.y;
+                        for(int iz = 0; iz < 2; ++iz){
+                            float z = iz == 0 ? minB.z : maxB.z;
+                            glm::vec4 corner = pitchMat * glm::vec4(x, y, z, 1.0f);
+                            minY = std::min(minY, corner.y);
+                        }
+                    }
+                }
+                rotatedFeetOffset = -minY;
+            }
             float modelHeight = m_forestHutMesh.maxBounds.y - m_forestHutMesh.minBounds.y;
             m_forestHutPosition = glm::vec3(
                 hutX,
-                terrainY + feetOffset * m_forestHutScale,
+                terrainY + rotatedFeetOffset * m_forestHutScale,
                 hutZ
             );
 
@@ -1310,7 +1470,7 @@ bool Game::init(){
 
             std::cout << "[Game] Forest hut loaded from " << forestHutPath << std::endl;
             std::cout << "[Game] Forest hut bounds: Y [" << m_forestHutMesh.minBounds.y
-                      << " to " << m_forestHutMesh.maxBounds.y << "], feet offset: " << feetOffset << std::endl;
+                      << " to " << m_forestHutMesh.maxBounds.y << "], feet offset (rotated): " << rotatedFeetOffset << std::endl;
             std::cout << "[Game] Forest hut scale: " << m_forestHutScale
                       << ", scaled height: " << (modelHeight * m_forestHutScale) << " units"
                       << ", vertices: " << m_forestHutMesh.totalVertexCount << std::endl;
@@ -1447,13 +1607,15 @@ void Game::update(){
             if(m_isNightMode){
                 // Night: Moon lighting (soft blue-white, dimmer) - 62.5% darker
                 m_light.direction = glm::normalize(glm::vec3(-0.3f, -0.8f, 0.5f));  // From moon position
-                m_light.color = glm::vec3(0.09375f, 0.105f, 0.13125f);  // 62.5% darker moonlight
+                m_light.color = glm::vec3(0.05f, 0.06f, 0.075f);  // Softer moonlight intensity
                 m_light.ambient = 0.0225f;  // 25% darker ambient (was 0.03)
+                m_light.specularStrength = 0.015f;  // Strongly reduced reflections at night
             } else {
                 // Day: Sun lighting (warm, bright)
                 m_light.direction = glm::normalize(glm::vec3(0.5f, -0.7f, -0.3f));
                 m_light.color = glm::vec3(1.0f, 0.98f, 0.92f);  // Warm sunlight
                 m_light.ambient = 0.2625f;  // 25% darker ambient (was 0.35)
+                m_light.specularStrength = 0.15f;
             }
             m_nightToggleHeld = true;
         } else if(tState == GLFW_RELEASE){
@@ -1564,6 +1726,9 @@ void Game::update(){
         }
     }
 
+    updateFireParticles(static_cast<float>(dt));
+    updateCampfireLight(static_cast<float>(dt));
+
     if(m_camera){
         m_camera->setViewport(g_windowPtr->width(), g_windowPtr->height());
     }
@@ -1586,6 +1751,18 @@ void Game::render(){
     glm::vec3 skyColor = m_isNightMode ? glm::vec3(0.0075f, 0.01125f, 0.03f) : glm::vec3(0.53f, 0.81f, 0.92f);
     const float fogStart = 200.0f;
     const float fogRange = 1200.0f;
+
+    auto uploadPointLight = [&](Shader* shader){
+        if(!shader) return;
+        bool enabled = m_campfireLight.enabled && m_campfireReady;
+        shader->setBool("uPointLightEnabled", enabled);
+        if(enabled){
+            shader->setVec3("uPointLightPos", m_campfireLight.position);
+            shader->setVec3("uPointLightColor", m_campfireLight.color);
+            shader->setFloat("uPointLightIntensity", m_campfireLight.intensity);
+            shader->setFloat("uPointLightRadius", m_campfireLight.radius);
+        }
+    };
 
     glViewport(0,0,m_shadowMapSize,m_shadowMapSize);
     glBindFramebuffer(GL_FRAMEBUFFER, m_shadowFBO);
@@ -1689,6 +1866,7 @@ void Game::render(){
     m_shader->setFloat("uSpecularStrength", m_light.specularStrength);
     m_shader->setFloat("uShininess", m_light.shininess);
     m_shader->setVec3("uCameraPos", m_camera->position());
+    uploadPointLight(m_shader);
     // Terrain displacement + texture fetch uniforms
     float heightScale = m_terrain->recommendedHeightScale();
     m_shader->setFloat("uHeightScale", heightScale);
@@ -1736,6 +1914,7 @@ void Game::render(){
         float charAmbientMult = m_isNightMode ? 0.25f : 0.5f;
         glm::vec3 ambientColor = glm::vec3(m_light.ambient) * m_light.color * charAmbientMult;
         m_characterShader->setVec3("uAmbientColor", ambientColor);
+        uploadPointLight(m_characterShader);
         m_characterShader->setVec3("uCameraPos", m_camera->position());
         m_characterShader->setVec3("uSkyColor", skyColor);
         m_characterShader->setFloat("uFogStart", fogStart);
@@ -1773,6 +1952,7 @@ void Game::render(){
         float lighthouseAmbientMult = m_isNightMode ? 0.25f : 0.5f;
         glm::vec3 ambientColor = glm::vec3(m_light.ambient) * m_light.color * lighthouseAmbientMult;
         m_characterShader->setVec3("uAmbientColor", ambientColor);
+        uploadPointLight(m_characterShader);
         m_characterShader->setVec3("uCameraPos", m_camera->position());
         m_characterShader->setVec3("uSkyColor", skyColor);
         m_characterShader->setFloat("uFogStart", fogStart);
@@ -1805,6 +1985,7 @@ void Game::render(){
         float treeAmbientMult = m_isNightMode ? 0.25f : 0.5f;
         glm::vec3 ambientColor = glm::vec3(m_light.ambient) * m_light.color * treeAmbientMult;
         m_characterShader->setVec3("uAmbientColor", ambientColor);
+        uploadPointLight(m_characterShader);
         m_characterShader->setVec3("uCameraPos", m_camera->position());
         m_characterShader->setVec3("uSkyColor", skyColor);
         m_characterShader->setFloat("uFogStart", fogStart);
@@ -1850,6 +2031,7 @@ void Game::render(){
         float campfireAmbientMult = m_isNightMode ? 0.25f : 0.5f;
         glm::vec3 ambientColor = glm::vec3(m_light.ambient) * m_light.color * campfireAmbientMult;
         m_characterShader->setVec3("uAmbientColor", ambientColor);
+        uploadPointLight(m_characterShader);
         m_characterShader->setVec3("uCameraPos", m_camera->position());
         m_characterShader->setVec3("uSkyColor", skyColor);
         m_characterShader->setFloat("uFogStart", fogStart);
@@ -1889,6 +2071,7 @@ void Game::render(){
         float hutAmbientMult = m_isNightMode ? 0.25f : 0.5f;
         glm::vec3 hutAmbient = glm::vec3(m_light.ambient) * m_light.color * hutAmbientMult;
         m_characterShader->setVec3("uAmbientColor", hutAmbient);
+        uploadPointLight(m_characterShader);
         m_characterShader->setVec3("uCameraPos", m_camera->position());
         m_characterShader->setVec3("uSkyColor", skyColor);
         m_characterShader->setFloat("uFogStart", fogStart);
@@ -1929,6 +2112,7 @@ void Game::render(){
         float grassAmbientMult = m_isNightMode ? 0.35f : 0.7f;
         glm::vec3 grassAmbient = m_light.color * m_light.ambient * grassAmbientMult;
         m_grassShader->setVec3("uAmbientColor", grassAmbient);
+        uploadPointLight(m_grassShader);
         glActiveTexture(GL_TEXTURE7);
         glBindTexture(GL_TEXTURE_2D, m_grassBillboardTex);
         m_grassShader->setInt("uGrassAtlas", 7);
@@ -1942,6 +2126,12 @@ void Game::render(){
         glActiveTexture(GL_TEXTURE0);
     }
     
+    if(m_fireFXReady){
+        glm::mat4 view = m_camera->viewMatrix();
+        glm::mat4 viewProj = m_camera->projectionMatrix() * view;
+        renderFireParticles(viewProj, view);
+    }
+
     // Render water
     glEnable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
@@ -1954,6 +2144,7 @@ void Game::render(){
     m_waterShader->setFloat("uFogRange", fogRange);
     m_waterShader->setVec3("uLightDir", m_light.direction);
     m_waterShader->setVec3("uLightColor", m_light.color);
+    uploadPointLight(m_waterShader);
     // Provide light space and shadow map so water can receive scene shadows
     m_waterShader->setMat4("uLightSpace", lightSpace);
     glActiveTexture(GL_TEXTURE0);
@@ -2093,6 +2284,152 @@ void Game::render(){
 #endif
 }
 
+void Game::setupCampfireLight(){
+    if(!m_campfireReady){
+        m_campfireLight.enabled = false;
+        return;
+    }
+    m_campfireLight.enabled = true;
+    m_campfireLight.position = m_campfireEmitterPos;
+    m_campfireLight.color = glm::vec3(1.0f, 0.65f, 0.25f);
+    m_campfireLight.baseIntensity = 2.2f;
+    m_campfireLight.intensity = m_campfireLight.baseIntensity;
+    m_campfireLight.radius = 30.0f;
+    m_campfireLight.flickerTimer = 0.0f;
+}
+
+void Game::initCampfireFireFX(){
+    if(!m_campfireReady || m_fireTexture == 0)
+        return;
+    if(m_fireShader == nullptr){
+        m_fireShader = new Shader();
+        if(!m_fireShader->compile(kFireParticleVert, kFireParticleFrag)){
+            delete m_fireShader;
+            m_fireShader = nullptr;
+            return;
+        }
+    }
+    if(m_fireVAO == 0){
+        glGenVertexArrays(1, &m_fireVAO);
+        glBindVertexArray(m_fireVAO);
+
+        glGenBuffers(1, &m_fireQuadVBO);
+        glBindBuffer(GL_ARRAY_BUFFER, m_fireQuadVBO);
+        glBufferData(GL_ARRAY_BUFFER, sizeof(float) * kFireQuadVertices.size(), kFireQuadVertices.data(), GL_STATIC_DRAW);
+        glEnableVertexAttribArray(0);
+        glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, sizeof(float) * 4, reinterpret_cast<void*>(0));
+        glEnableVertexAttribArray(1);
+        glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, sizeof(float) * 4, reinterpret_cast<void*>(sizeof(float) * 2));
+
+        glGenBuffers(1, &m_fireInstanceVBO);
+        glBindBuffer(GL_ARRAY_BUFFER, m_fireInstanceVBO);
+        glBufferData(GL_ARRAY_BUFFER, kMaxFireParticles * sizeof(float) * 6, nullptr, GL_DYNAMIC_DRAW);
+        glEnableVertexAttribArray(2);
+        glVertexAttribPointer(2, 4, GL_FLOAT, GL_FALSE, sizeof(float) * 6, reinterpret_cast<void*>(0));
+        glVertexAttribDivisor(2, 1);
+        glEnableVertexAttribArray(3);
+        glVertexAttribPointer(3, 2, GL_FLOAT, GL_FALSE, sizeof(float) * 6, reinterpret_cast<void*>(sizeof(float) * 4));
+        glVertexAttribDivisor(3, 1);
+
+        glBindVertexArray(0);
+        glBindBuffer(GL_ARRAY_BUFFER, 0);
+    }
+    m_fireParticles.resize(kMaxFireParticles);
+    for(auto& particle : m_fireParticles){
+        respawnFireParticle(particle);
+    }
+    uploadFireParticlesToGPU();
+    m_fireFXReady = true;
+}
+
+void Game::respawnFireParticle(FireParticle& particle){
+    std::uniform_real_distribution<float> spread(-0.35f, 0.35f);
+    std::uniform_real_distribution<float> rise(1.6f, 2.6f);
+    std::uniform_real_distribution<float> life(0.7f, 1.2f);
+    std::uniform_real_distribution<float> size(0.9f, 1.5f);
+    std::uniform_real_distribution<float> seedDist(0.0f, 1000.0f);
+    particle.position = m_campfireEmitterPos + glm::vec3(spread(m_fireRng), 0.0f, spread(m_fireRng));
+    particle.velocity = glm::vec3(spread(m_fireRng) * 0.5f, rise(m_fireRng), spread(m_fireRng) * 0.5f);
+    particle.life = 0.0f;
+    particle.maxLife = life(m_fireRng);
+    particle.size = size(m_fireRng);
+    particle.seed = seedDist(m_fireRng);
+}
+
+void Game::updateFireParticles(float dt){
+    if(!m_fireFXReady)
+        return;
+    for(auto& particle : m_fireParticles){
+        particle.life += dt;
+        if(particle.life >= particle.maxLife){
+            respawnFireParticle(particle);
+            continue;
+        }
+        particle.position += particle.velocity * dt;
+        particle.velocity += glm::vec3(0.0f, 1.5f, 0.0f) * dt;
+        particle.velocity.x *= 0.98f;
+        particle.velocity.z *= 0.98f;
+    }
+    uploadFireParticlesToGPU();
+}
+
+void Game::uploadFireParticlesToGPU(){
+    if(!m_fireFXReady || m_fireInstanceVBO == 0)
+        return;
+    std::vector<float> buffer(m_fireParticles.size() * 6);
+    size_t idx = 0;
+    for(const auto& particle : m_fireParticles){
+        float lifeNorm = particle.maxLife > 0.0f ? particle.life / particle.maxLife : 0.0f;
+        buffer[idx++] = particle.position.x;
+        buffer[idx++] = particle.position.y;
+        buffer[idx++] = particle.position.z;
+        buffer[idx++] = particle.size;
+        buffer[idx++] = glm::clamp(lifeNorm, 0.0f, 1.0f);
+        buffer[idx++] = particle.seed;
+    }
+    glBindBuffer(GL_ARRAY_BUFFER, m_fireInstanceVBO);
+    glBufferSubData(GL_ARRAY_BUFFER, 0, buffer.size() * sizeof(float), buffer.data());
+    glBindBuffer(GL_ARRAY_BUFFER, 0);
+}
+
+void Game::renderFireParticles(const glm::mat4& viewProj, const glm::mat4& view){
+    if(!m_fireFXReady || !m_fireShader || m_fireVAO == 0)
+        return;
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_ONE, GL_ONE);
+    glDepthMask(GL_FALSE);
+    m_fireShader->bind();
+    m_fireShader->setMat4("uViewProj", viewProj);
+    glm::vec3 rawRight(view[0][0], view[1][0], view[2][0]);
+    glm::vec3 rawUp(view[0][1], view[1][1], view[2][1]);
+    if(glm::length2(rawRight) < 1e-6f) rawRight = glm::vec3(1.0f, 0.0f, 0.0f);
+    if(glm::length2(rawUp) < 1e-6f) rawUp = glm::vec3(0.0f, 1.0f, 0.0f);
+    glm::vec3 camRight = glm::normalize(rawRight);
+    glm::vec3 camUp = glm::normalize(rawUp);
+    m_fireShader->setVec3("uCameraRight", camRight);
+    m_fireShader->setVec3("uCameraUp", camUp);
+    glActiveTexture(GL_TEXTURE15);
+    glBindTexture(GL_TEXTURE_2D, m_fireTexture);
+    m_fireShader->setInt("uFireTex", 15);
+    glBindVertexArray(m_fireVAO);
+    glDrawArraysInstanced(GL_TRIANGLES, 0, kFireQuadVertexCount, static_cast<GLsizei>(m_fireParticles.size()));
+    glBindVertexArray(0);
+    glDepthMask(GL_TRUE);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    glDisable(GL_BLEND);
+}
+
+void Game::updateCampfireLight(float dt){
+    if(!m_campfireLight.enabled)
+        return;
+    m_campfireLight.flickerTimer += dt;
+    float flicker = 0.6f + 0.4f * std::sin(m_campfireLight.flickerTimer * 6.2f + std::sin(m_campfireLight.flickerTimer * 2.3f));
+    m_campfireLight.intensity = m_campfireLight.baseIntensity * glm::clamp(flicker, 0.6f, 1.3f);
+    float colorShift = 0.04f * std::sin(m_campfireLight.flickerTimer * 4.1f);
+    m_campfireLight.color = glm::vec3(1.0f, 0.6f + colorShift, 0.2f);
+    m_campfireLight.position = m_campfireEmitterPos;
+}
+
 void Game::shutdown(){
     std::cout << "[Game] Shutdown" << std::endl;
 #ifdef BUILD_IMGUI
@@ -2104,6 +2441,12 @@ void Game::shutdown(){
     if(m_shadowFBO) { glDeleteFramebuffers(1, &m_shadowFBO); m_shadowFBO = 0; }
     delete m_depthShader; m_depthShader = nullptr;
     delete m_skinnedDepthShader; m_skinnedDepthShader = nullptr;
+    if(m_fireTexture) { glDeleteTextures(1, &m_fireTexture); m_fireTexture = 0; }
+    if(m_fireInstanceVBO) { glDeleteBuffers(1, &m_fireInstanceVBO); m_fireInstanceVBO = 0; }
+    if(m_fireQuadVBO) { glDeleteBuffers(1, &m_fireQuadVBO); m_fireQuadVBO = 0; }
+    if(m_fireVAO) { glDeleteVertexArrays(1, &m_fireVAO); m_fireVAO = 0; }
+    delete m_fireShader; m_fireShader = nullptr;
+    m_fireFXReady = false;
     if(m_grassTexture) { glDeleteTextures(1, &m_grassTexture); m_grassTexture = 0; }
     if(m_texFungus) { glDeleteTextures(1, &m_texFungus); m_texFungus = 0; }
     if(m_texSandgrass) { glDeleteTextures(1, &m_texSandgrass); m_texSandgrass = 0; }

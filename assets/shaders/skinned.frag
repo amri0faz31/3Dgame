@@ -22,6 +22,11 @@ uniform float uFogStart;
 uniform float uFogRange;
 uniform float uSpecularStrength;
 uniform float uShininess;
+uniform bool uPointLightEnabled;
+uniform vec3 uPointLightPos;
+uniform vec3 uPointLightColor;
+uniform float uPointLightIntensity;
+uniform float uPointLightRadius;
 
 float calculateShadow(vec4 fragPosLightSpace, vec3 normal, vec3 lightDir) {
     vec3 projCoords = fragPosLightSpace.xyz / fragPosLightSpace.w;
@@ -64,11 +69,27 @@ void main(){
     vec3 ambient = base * uAmbientColor;
     vec3 diffuse = base * diff * uLightColor * shadow;
     vec3 specular = spec * uLightColor * shadow;
+
+    if(uPointLightEnabled){
+        vec3 toLight = uPointLightPos - fs_in.worldPos;
+        float dist = length(toLight);
+        if(dist < uPointLightRadius){
+            vec3 pointDir = normalize(toLight);
+            float attenuation = 1.0 - dist / uPointLightRadius;
+            attenuation *= attenuation;
+            float nDotL = max(dot(normal, pointDir), 0.0);
+            if(nDotL > 0.0){
+                vec3 pointColor = uPointLightColor * uPointLightIntensity;
+                diffuse += base * nDotL * pointColor * attenuation;
+                float specPoint = pow(max(dot(normal, normalize(pointDir + viewDir)), 0.0), uShininess) * uSpecularStrength;
+                specular += specPoint * pointColor * attenuation;
+            }
+        }
+    }
+
     vec3 color = ambient + diffuse + specular;
 
-    float dist = length(uCameraPos - fs_in.worldPos);
-    float fogFactor = clamp((dist - uFogStart) / uFogRange, 0.0, 1.0);
-    color = mix(color, uSkyColor, fogFactor);
+    // Fog disabled; character color remains unaffected by distance
     color = pow(color, vec3(1.0 / 2.2));
 
     FragColor = vec4(color, 1.0);
