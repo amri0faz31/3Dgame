@@ -65,6 +65,18 @@ private:
         bool enabled = false;
         float flickerTimer = 0.0f;
     } m_campfireLight;
+    struct SpotLight {
+        glm::vec3 position{0.0f};
+        glm::vec3 direction{0.0f, -1.0f, 0.0f};
+        glm::vec3 color{1.0f};
+        float intensity = 1.0f;
+        float range = 120.0f;
+        float innerCutoffCos = 0.98f;
+        float outerCutoffCos = 0.94f;
+        bool enabled = false;
+    } m_beaconLight;
+    float m_beaconRotationAngle = 0.0f;
+    float m_beaconRotationSpeed = glm::radians(35.0f);
     // Procedural grass texture (GL handle)
     unsigned int m_grassTexture = 0;
     unsigned int m_texFungus = 0;
@@ -82,12 +94,14 @@ private:
     unsigned int m_fireQuadVBO = 0;
     unsigned int m_fireInstanceVBO = 0;
     unsigned int m_fireTexture = 0;
+    unsigned int m_beaconDiscTexture = 0;
     class Shader* m_stickFlameShader = nullptr;
     unsigned int m_stickFlameVAO = 0;
     unsigned int m_stickFlameVBO = 0;
     bool m_stickFlameReady = false;
     glm::vec3 m_stickFlamePos{0.0f};
     bool m_stickFlameVisible = false;
+    bool m_beaconGlowVisible = false;
     struct FireParticle {
         glm::vec3 position{0.0f};
         glm::vec3 velocity{0.0f, 1.0f, 0.0f};
@@ -107,7 +121,9 @@ private:
     void uploadFireParticlesToGPU();
     void renderFireParticles(const glm::mat4& viewProj, const glm::mat4& viewMatrix);
     void renderStickFlame(const glm::mat4& viewProj, const glm::mat4& viewMatrix);
+    void renderBeaconGlow(const glm::mat4& viewProj, const glm::mat4& viewMatrix);
     void updateCampfireLight(float dt);
+    void updateBeaconLight(float dt);
 
     float m_waterLevel = 10.0f;
     float m_grassWaterGap = 6.0f; // keep grass at least 6 units above water plane
@@ -187,6 +203,7 @@ private:
     glm::vec3 m_lighthousePosition{0.0f};
     float m_lighthouseScale = 1.0f;
     bool m_lighthouseReady = false;
+    glm::vec3 m_lighthouseBeaconLocal{0.0f};
     
     struct TreeInstance {
         glm::vec3 position{0.0f};
@@ -278,6 +295,7 @@ private:
     void dropStickToTerrain();
     glm::mat4 buildHeldStickMatrix() const;
     glm::vec3 getStickTipWorldPosition() const;
+    glm::vec3 getLighthouseBeaconWorldPosition() const;
     void igniteStickTorch();
     void updateStickLight(const glm::vec3& tipWorldPos);
 };

@@ -80,6 +80,40 @@ std::string resolveExistingPath(const std::vector<std::string>& candidates){
     return {};
 }
 
+GLuint createBeaconDiscTexture(int resolution){
+    const int size = std::max(resolution, 16);
+    std::vector<unsigned char> pixels(size * size * 4, 0u);
+    for(int y = 0; y < size; ++y){
+        for(int x = 0; x < size; ++x){
+            float u = (static_cast<float>(x) + 0.5f) / static_cast<float>(size);
+            float v = (static_cast<float>(y) + 0.5f) / static_cast<float>(size);
+            float nx = u * 2.0f - 1.0f;
+            float ny = v * 2.0f - 1.0f;
+            float r = std::sqrt(nx * nx + ny * ny);
+            float mask = std::clamp(1.05f - r, 0.0f, 1.0f);
+            float core = std::pow(mask, 1.2f);
+            unsigned char alpha = static_cast<unsigned char>(std::clamp(core * 255.0f, 0.0f, 255.0f));
+            unsigned char glow = static_cast<unsigned char>(std::clamp(220.0f + 35.0f * mask, 0.0f, 255.0f));
+            size_t idx = (y * size + x) * 4;
+            pixels[idx + 0] = glow;
+            pixels[idx + 1] = glow;
+            pixels[idx + 2] = glow;
+            pixels[idx + 3] = alpha;
+        }
+    }
+    GLuint tex = 0;
+    glGenTextures(1, &tex);
+    if(tex == 0) return 0;
+    glBindTexture(GL_TEXTURE_2D, tex);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, size, size, 0, GL_RGBA, GL_UNSIGNED_BYTE, pixels.data());
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glBindTexture(GL_TEXTURE_2D, 0);
+    return tex;
+}
+
 glm::vec3 sampleTerrainNormal(float worldX, float worldZ){
     const float eps = 0.25f;
     float hL = getTerrainHeightAt(worldX - eps, worldZ);
@@ -170,6 +204,14 @@ uniform vec3 uPointLightPos[MAX_POINT_LIGHTS];
 uniform vec3 uPointLightColor[MAX_POINT_LIGHTS];
 uniform float uPointLightIntensity[MAX_POINT_LIGHTS];
 uniform float uPointLightRadius[MAX_POINT_LIGHTS];
+uniform bool uSpotLightEnabled;
+uniform vec3 uSpotLightPos;
+uniform vec3 uSpotLightDir;
+uniform vec3 uSpotLightColor;
+uniform float uSpotLightIntensity;
+uniform float uSpotLightRange;
+uniform float uSpotLightInnerCutoff;
+uniform float uSpotLightOuterCutoff;
 
 // Base terrain palette: light green, dark green, and light brown
 const vec3 lightGreen  = vec3(0.35, 0.80, 0.30);
@@ -314,6 +356,31 @@ void main(){
             }
         }
     }
+
+    if(uSpotLightEnabled){
+        vec3 toFrag = vWorldPos - uSpotLightPos;
+        float distSpot = length(toFrag);
+        if(distSpot < uSpotLightRange){
+            vec3 dirFromLight = normalize(toFrag);
+            float theta = dot(normalize(uSpotLightDir), dirFromLight);
+            if(theta > uSpotLightOuterCutoff){
+                float epsilon = max(uSpotLightInnerCutoff - uSpotLightOuterCutoff, 0.0001);
+                float coneFactor = clamp((theta - uSpotLightOuterCutoff) / epsilon, 0.0, 1.0);
+                float distanceFactor = clamp(1.0 - distSpot / uSpotLightRange, 0.0, 1.0);
+                float attenuation = coneFactor * coneFactor * distanceFactor * distanceFactor;
+                vec3 lightDir = normalize(uSpotLightPos - vWorldPos);
+                float spotDiffuse = max(dot(n, lightDir), 0.0);
+                if(spotDiffuse > 0.0){
+                    vec3 spotColor = uSpotLightColor * uSpotLightIntensity;
+                    vec3 spotDiffuseCol = base * spotDiffuse * spotColor;
+                    float spotSpecPow = pow(max(dot(n, normalize(lightDir + V)), 0.0), uShininess);
+                    float spotSpecStrength = spotSpecPow * uSpecularStrength * nightSpecScale;
+                    vec3 spotSpec = spotSpecStrength * spotColor;
+                    color += (spotDiffuseCol + spotSpec) * attenuation;
+                }
+            }
+        }
+    }
     
     // Linear fog based on distance to camera (start/range) for controlled blending
     // Fog disabled; keep terrain color untouched by distance-based blending
@@ -396,6 +463,14 @@ uniform vec3 uPointLightPos[MAX_POINT_LIGHTS];
 uniform vec3 uPointLightColor[MAX_POINT_LIGHTS];
 uniform float uPointLightIntensity[MAX_POINT_LIGHTS];
 uniform float uPointLightRadius[MAX_POINT_LIGHTS];
+uniform bool uSpotLightEnabled;
+uniform vec3 uSpotLightPos;
+uniform vec3 uSpotLightDir;
+uniform vec3 uSpotLightColor;
+uniform float uSpotLightIntensity;
+uniform float uSpotLightRange;
+uniform float uSpotLightInnerCutoff;
+uniform float uSpotLightOuterCutoff;
 uniform float uFogStart;
 uniform float uFogRange;
 uniform sampler2D uWaveNormal0;
@@ -485,6 +560,30 @@ void main(){
                 float pointSpec = pow(max(dot(n, HPoint), 0.0), 192.0);
                 vec3 pointSpecular = pointSpec * pointColor * 0.5;
                 color += (pointDiffuse + pointSpecular) * attenuation;
+            }
+        }
+    }
+
+    if(uSpotLightEnabled){
+        vec3 toFrag = fs_in.worldPos - uSpotLightPos;
+        float distSpot = length(toFrag);
+        if(distSpot < uSpotLightRange){
+            vec3 dirFromLight = normalize(toFrag);
+            float theta = dot(normalize(uSpotLightDir), dirFromLight);
+            if(theta > uSpotLightOuterCutoff){
+                float epsilon = max(uSpotLightInnerCutoff - uSpotLightOuterCutoff, 0.0001);
+                float coneFactor = clamp((theta - uSpotLightOuterCutoff) / epsilon, 0.0, 1.0);
+                float distanceFactor = clamp(1.0 - distSpot / uSpotLightRange, 0.0, 1.0);
+                float attenuation = coneFactor * coneFactor * distanceFactor * distanceFactor;
+                vec3 lightDir = normalize(uSpotLightPos - fs_in.worldPos);
+                float spotDiffuse = max(dot(n, lightDir), 0.0);
+                if(spotDiffuse > 0.0){
+                    vec3 spotColor = uSpotLightColor * uSpotLightIntensity;
+                    vec3 spotDiffuseCol = waterColor * spotDiffuse * spotColor;
+                    float spotSpec = pow(max(dot(n, normalize(lightDir + V)), 0.0), 160.0);
+                    vec3 spotSpecular = spotSpec * spotColor * 0.4;
+                    color += (spotDiffuseCol + spotSpecular) * attenuation;
+                }
             }
         }
     }
@@ -773,12 +872,14 @@ in vec2 vUV;
 out vec4 FragColor;
 uniform sampler2D uFlameTex;
 uniform float uGlow;
+uniform vec3 uTint;
+uniform float uOpacity;
 void main(){
     vec4 texSample = texture(uFlameTex, vUV);
     if(texSample.a < 0.05) discard;
-    vec3 warm = mix(vec3(1.0, 0.75, 0.35), vec3(1.0, 0.35, 0.05), clamp(uGlow, 0.0, 1.0));
-    vec3 color = texSample.rgb * warm;
-    FragColor = vec4(color, texSample.a * 0.9);
+    float glowFactor = mix(0.65, 1.35, clamp(uGlow, 0.0, 1.0));
+    vec3 color = texSample.rgb * (uTint * glowFactor);
+    FragColor = vec4(color, texSample.a * uOpacity);
 }
 )GLSL";
 
@@ -1317,6 +1418,15 @@ bool Game::init(){
                 terrainY + feetOffset * m_lighthouseScale,  // Lift by feet offset
                 beachZ
             );
+            m_lighthouseBeaconLocal = m_lighthouseMesh.maxBounds;
+            m_beaconLight.color = glm::vec3(1.0f);
+            m_beaconLight.range = 220.0f;
+            m_beaconLight.intensity = 4.0f;
+            float inner = glm::radians(7.0f);
+            float outer = glm::radians(10.5f);
+            m_beaconLight.innerCutoffCos = std::cos(inner);
+            m_beaconLight.outerCutoffCos = std::cos(outer);
+            m_beaconLight.enabled = false;
             
             std::cout << "[Game] Lighthouse loaded and placed at (" 
                       << beachX << ", " << terrainY << " (terrain)" << ", " << beachZ << ")" << std::endl;
@@ -1474,6 +1584,13 @@ bool Game::init(){
     } else {
         std::cerr << "[Game] Could not locate assets/models/campfire.glb" << std::endl;
         m_campfireLight.enabled = false;
+    }
+
+    if(m_beaconDiscTexture == 0){
+        m_beaconDiscTexture = createBeaconDiscTexture(192);
+        if(m_beaconDiscTexture == 0){
+            std::cerr << "[Game] Failed to create beacon disc texture" << std::endl;
+        }
     }
 
     // Load stick model for world interaction
@@ -1825,6 +1942,7 @@ void Game::update(){
 
     updateFireParticles(static_cast<float>(dt));
     updateCampfireLight(static_cast<float>(dt));
+    updateBeaconLight(static_cast<float>(dt));
     updateStickInteraction();
 
     if(m_camera){
@@ -1873,6 +1991,19 @@ void Game::render(){
             shader->setVec3(std::string("uPointLightColor") + index, light->color);
             shader->setFloat(std::string("uPointLightIntensity") + index, light->intensity);
             shader->setFloat(std::string("uPointLightRadius") + index, light->radius);
+        }
+    };
+    auto uploadSpotLight = [&](Shader* shader){
+        if(!shader) return;
+        shader->setBool("uSpotLightEnabled", m_beaconLight.enabled);
+        if(m_beaconLight.enabled){
+            shader->setVec3("uSpotLightPos", m_beaconLight.position);
+            shader->setVec3("uSpotLightDir", m_beaconLight.direction);
+            shader->setVec3("uSpotLightColor", m_beaconLight.color);
+            shader->setFloat("uSpotLightIntensity", m_beaconLight.intensity);
+            shader->setFloat("uSpotLightRange", m_beaconLight.range);
+            shader->setFloat("uSpotLightInnerCutoff", m_beaconLight.innerCutoffCos);
+            shader->setFloat("uSpotLightOuterCutoff", m_beaconLight.outerCutoffCos);
         }
     };
 
@@ -2003,6 +2134,7 @@ void Game::render(){
     m_shader->setFloat("uShininess", m_light.shininess);
     m_shader->setVec3("uCameraPos", m_camera->position());
     uploadPointLights(m_shader);
+    uploadSpotLight(m_shader);
     // Terrain displacement + texture fetch uniforms
     float heightScale = m_terrain->recommendedHeightScale();
     m_shader->setFloat("uHeightScale", heightScale);
@@ -2051,6 +2183,7 @@ void Game::render(){
         glm::vec3 ambientColor = glm::vec3(m_light.ambient) * m_light.color * charAmbientMult;
         m_characterShader->setVec3("uAmbientColor", ambientColor);
         uploadPointLights(m_characterShader);
+        uploadSpotLight(m_characterShader);
         m_characterShader->setVec3("uCameraPos", m_camera->position());
         m_characterShader->setVec3("uSkyColor", skyColor);
         m_characterShader->setFloat("uFogStart", fogStart);
@@ -2089,6 +2222,7 @@ void Game::render(){
         glm::vec3 ambientColor = glm::vec3(m_light.ambient) * m_light.color * lighthouseAmbientMult;
         m_characterShader->setVec3("uAmbientColor", ambientColor);
         uploadPointLights(m_characterShader);
+        uploadSpotLight(m_characterShader);
         m_characterShader->setVec3("uCameraPos", m_camera->position());
         m_characterShader->setVec3("uSkyColor", skyColor);
         m_characterShader->setFloat("uFogStart", fogStart);
@@ -2122,6 +2256,7 @@ void Game::render(){
         glm::vec3 ambientColor = glm::vec3(m_light.ambient) * m_light.color * treeAmbientMult;
         m_characterShader->setVec3("uAmbientColor", ambientColor);
         uploadPointLights(m_characterShader);
+        uploadSpotLight(m_characterShader);
         m_characterShader->setVec3("uCameraPos", m_camera->position());
         m_characterShader->setVec3("uSkyColor", skyColor);
         m_characterShader->setFloat("uFogStart", fogStart);
@@ -2202,6 +2337,7 @@ void Game::render(){
         glm::vec3 stickAmbient = glm::vec3(m_light.ambient) * m_light.color * stickAmbientMult;
         m_characterShader->setVec3("uAmbientColor", stickAmbient);
         uploadPointLights(m_characterShader);
+        uploadSpotLight(m_characterShader);
         m_characterShader->setVec3("uCameraPos", m_camera->position());
         m_characterShader->setVec3("uSkyColor", skyColor);
         m_characterShader->setFloat("uFogStart", fogStart);
@@ -2242,6 +2378,7 @@ void Game::render(){
         glm::vec3 hutAmbient = glm::vec3(m_light.ambient) * m_light.color * hutAmbientMult;
         m_characterShader->setVec3("uAmbientColor", hutAmbient);
         uploadPointLights(m_characterShader);
+        uploadSpotLight(m_characterShader);
         m_characterShader->setVec3("uCameraPos", m_camera->position());
         m_characterShader->setVec3("uSkyColor", skyColor);
         m_characterShader->setFloat("uFogStart", fogStart);
@@ -2283,6 +2420,7 @@ void Game::render(){
         glm::vec3 grassAmbient = m_light.color * m_light.ambient * grassAmbientMult;
         m_grassShader->setVec3("uAmbientColor", grassAmbient);
         uploadPointLights(m_grassShader);
+        uploadSpotLight(m_grassShader);
         glActiveTexture(GL_TEXTURE7);
         glBindTexture(GL_TEXTURE_2D, m_grassBillboardTex);
         m_grassShader->setInt("uGrassAtlas", 7);
@@ -2301,6 +2439,7 @@ void Game::render(){
         glm::mat4 viewProj = m_camera->projectionMatrix() * view;
         renderFireParticles(viewProj, view);
         renderStickFlame(viewProj, view);
+        renderBeaconGlow(viewProj, view);
     }
 
     // Render water
@@ -2316,6 +2455,7 @@ void Game::render(){
     m_waterShader->setVec3("uLightDir", m_light.direction);
     m_waterShader->setVec3("uLightColor", m_light.color);
     uploadPointLights(m_waterShader);
+    uploadSpotLight(m_waterShader);
     // Provide light space and shadow map so water can receive scene shadows
     m_waterShader->setMat4("uLightSpace", lightSpace);
     glActiveTexture(GL_TEXTURE0);
@@ -2637,9 +2777,65 @@ void Game::renderStickFlame(const glm::mat4& viewProj, const glm::mat4& view){
     m_stickFlameShader->setVec3("uCameraRight", camRight);
     m_stickFlameShader->setVec3("uCameraUp", camUp);
     m_stickFlameShader->setFloat("uSize", baseSize);
-    m_stickFlameShader->setFloat("uGlow", 0.85f);
+    m_stickFlameShader->setFloat("uGlow", 0.8f);
+    m_stickFlameShader->setVec3("uTint", glm::vec3(1.0f, 0.72f, 0.32f));
+    m_stickFlameShader->setFloat("uOpacity", 0.92f);
     glActiveTexture(GL_TEXTURE16);
     glBindTexture(GL_TEXTURE_2D, m_fireTexture);
+    m_stickFlameShader->setInt("uFlameTex", 16);
+    glBindVertexArray(m_stickFlameVAO);
+    glDrawArrays(GL_TRIANGLES, 0, kFireQuadVertexCount);
+    glBindVertexArray(0);
+    glDepthMask(GL_TRUE);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    glDisable(GL_BLEND);
+}
+
+void Game::renderBeaconGlow(const glm::mat4& viewProj, const glm::mat4&){
+    if(!m_stickFlameReady || !m_stickFlameShader || !m_beaconGlowVisible || !m_beaconLight.enabled)
+        return;
+    if(m_beaconDiscTexture == 0)
+        return;
+
+    glm::vec3 beaconPos = m_beaconLight.position;
+    glm::vec3 planarDir(m_beaconLight.direction.x, 0.0f, m_beaconLight.direction.z);
+    float planarLen2 = glm::length2(planarDir);
+    if(planarLen2 < 1e-6f){
+        planarDir = glm::vec3(std::cos(m_beaconRotationAngle), 0.0f, std::sin(m_beaconRotationAngle));
+        planarLen2 = glm::length2(planarDir);
+    }
+    if(planarLen2 < 1e-6f){
+        planarDir = glm::vec3(1.0f, 0.0f, 0.0f);
+    } else {
+        planarDir /= std::sqrt(planarLen2);
+    }
+    glm::vec3 tangentDir(-planarDir.z, 0.0f, planarDir.x);
+    if(glm::length2(tangentDir) < 1e-6f){
+        tangentDir = glm::vec3(0.0f, 0.0f, 1.0f);
+    } else {
+        tangentDir = glm::normalize(tangentDir);
+    }
+
+    float orbitRadius = 0.65f * m_lighthouseScale;
+    glm::vec3 orbitPos = beaconPos + planarDir * orbitRadius;
+    float discHeightOffset = 0.05f * m_lighthouseScale;
+    glm::vec3 discWorldPos = orbitPos + glm::vec3(0.0f, discHeightOffset, 0.0f);
+    float discSize = 0.65f * m_lighthouseScale;
+
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE);
+    glDepthMask(GL_FALSE);
+    m_stickFlameShader->bind();
+    m_stickFlameShader->setMat4("uViewProj", viewProj);
+    m_stickFlameShader->setVec3("uWorldPos", discWorldPos);
+    m_stickFlameShader->setVec3("uCameraRight", tangentDir);
+    m_stickFlameShader->setVec3("uCameraUp", planarDir);
+    m_stickFlameShader->setFloat("uSize", discSize);
+    m_stickFlameShader->setFloat("uGlow", 0.85f);
+    m_stickFlameShader->setVec3("uTint", glm::vec3(1.35f, 1.32f, 1.2f));
+    m_stickFlameShader->setFloat("uOpacity", 1.0f);
+    glActiveTexture(GL_TEXTURE16);
+    glBindTexture(GL_TEXTURE_2D, m_beaconDiscTexture);
     m_stickFlameShader->setInt("uFlameTex", 16);
     glBindVertexArray(m_stickFlameVAO);
     glDrawArrays(GL_TRIANGLES, 0, kFireQuadVertexCount);
@@ -2660,6 +2856,36 @@ void Game::updateCampfireLight(float dt){
     m_campfireLight.position = m_campfireEmitterPos;
 }
 
+glm::vec3 Game::getLighthouseBeaconWorldPosition() const{
+    if(!m_lighthouseReady) return glm::vec3(0.0f);
+    return m_lighthousePosition + m_lighthouseBeaconLocal * m_lighthouseScale;
+}
+
+void Game::updateBeaconLight(float dt){
+    if(!m_lighthouseReady){
+        m_beaconLight.enabled = false;
+        m_beaconGlowVisible = false;
+        return;
+    }
+    if(!m_isNightMode){
+        m_beaconLight.enabled = false;
+        m_beaconGlowVisible = false;
+        return;
+    }
+    m_beaconRotationAngle = std::fmod(m_beaconRotationAngle + m_beaconRotationSpeed * dt, glm::two_pi<float>());
+    glm::vec3 beaconPos = getLighthouseBeaconWorldPosition();
+    glm::vec3 sweepDir(std::cos(m_beaconRotationAngle), -0.2f, std::sin(m_beaconRotationAngle));
+    if(glm::length2(sweepDir) < 1e-4f){
+        sweepDir = glm::vec3(0.0f, -1.0f, 0.0f);
+    } else {
+        sweepDir = glm::normalize(sweepDir);
+    }
+    m_beaconLight.position = beaconPos;
+    m_beaconLight.direction = sweepDir;
+    m_beaconLight.enabled = true;
+    m_beaconGlowVisible = true;
+}
+
 void Game::shutdown(){
     std::cout << "[Game] Shutdown" << std::endl;
 #ifdef BUILD_IMGUI
@@ -2672,6 +2898,7 @@ void Game::shutdown(){
     delete m_depthShader; m_depthShader = nullptr;
     delete m_skinnedDepthShader; m_skinnedDepthShader = nullptr;
     if(m_fireTexture) { glDeleteTextures(1, &m_fireTexture); m_fireTexture = 0; }
+    if(m_beaconDiscTexture) { glDeleteTextures(1, &m_beaconDiscTexture); m_beaconDiscTexture = 0; }
     if(m_fireInstanceVBO) { glDeleteBuffers(1, &m_fireInstanceVBO); m_fireInstanceVBO = 0; }
     if(m_fireQuadVBO) { glDeleteBuffers(1, &m_fireQuadVBO); m_fireQuadVBO = 0; }
     if(m_fireVAO) { glDeleteVertexArrays(1, &m_fireVAO); m_fireVAO = 0; }
