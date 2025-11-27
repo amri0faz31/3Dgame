@@ -28,6 +28,11 @@ uniform vec3 uPointLightPos[MAX_POINT_LIGHTS];
 uniform vec3 uPointLightColor[MAX_POINT_LIGHTS];
 uniform float uPointLightIntensity[MAX_POINT_LIGHTS];
 uniform float uPointLightRadius[MAX_POINT_LIGHTS];
+uniform bool uBeaconLightEnabled;
+uniform vec3 uBeaconLightPos;
+uniform vec3 uBeaconLightColor;
+uniform float uBeaconLightIntensity;
+uniform float uBeaconLightRadius;
 
 float calculateShadow(vec4 fragPosLightSpace, vec3 normal, vec3 lightDir) {
     vec3 projCoords = fragPosLightSpace.xyz / fragPosLightSpace.w;
@@ -89,6 +94,24 @@ void main(){
     }
 
     vec3 color = ambient + diffuse + specular;
+
+    if(uBeaconLightEnabled){
+        vec3 toLight = uBeaconLightPos - fs_in.worldPos;
+        float dist = length(toLight);
+        if(dist < uBeaconLightRadius){
+            vec3 pointDir = normalize(toLight);
+            float attenuation = 1.0 - dist / uBeaconLightRadius;
+            attenuation *= attenuation;
+            float nDotL = max(dot(normal, pointDir), 0.0);
+            if(nDotL > 0.0){
+                vec3 beaconColor = uBeaconLightColor * uBeaconLightIntensity;
+                diffuse += base * nDotL * beaconColor * attenuation;
+                float specPoint = pow(max(dot(normal, normalize(pointDir + viewDir)), 0.0), uShininess) * uSpecularStrength;
+                specular += specPoint * beaconColor * attenuation;
+                color = ambient + diffuse + specular;
+            }
+        }
+    }
 
     // Fog disabled; character color remains unaffected by distance
     color = pow(color, vec3(1.0 / 2.2));

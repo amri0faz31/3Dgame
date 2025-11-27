@@ -51,6 +51,12 @@ constexpr size_t kMaxBones = 128;
 constexpr int kMaxFireParticles = 96;
 constexpr int kFireQuadVertexCount = 6;
 constexpr int kMaxPointLights = 2;
+constexpr float kBeaconOrbitRadiusFactor = 0.45f;
+constexpr float kBeaconHeightOffsetFactor = 0.02f;
+constexpr float kBeaconSphereScaleFactor = 0.18f;
+constexpr float kBeaconLocalLightRadiusFactor = 0.55f;
+constexpr float kBeaconLocalLightIntensity = 3.0f;
+const glm::vec3 kBeaconLocalLightColor = glm::vec3(1.25f, 1.23f, 1.15f);
 constexpr std::array<float, kFireQuadVertexCount * 4> kFireQuadVertices = {
     // corner.x, corner.y, u, v
     -0.5f, -0.5f, 0.0f, 1.0f,
@@ -78,40 +84,6 @@ std::string resolveExistingPath(const std::vector<std::string>& candidates){
         if(file) return path;
     }
     return {};
-}
-
-GLuint createBeaconDiscTexture(int resolution){
-    const int size = std::max(resolution, 16);
-    std::vector<unsigned char> pixels(size * size * 4, 0u);
-    for(int y = 0; y < size; ++y){
-        for(int x = 0; x < size; ++x){
-            float u = (static_cast<float>(x) + 0.5f) / static_cast<float>(size);
-            float v = (static_cast<float>(y) + 0.5f) / static_cast<float>(size);
-            float nx = u * 2.0f - 1.0f;
-            float ny = v * 2.0f - 1.0f;
-            float r = std::sqrt(nx * nx + ny * ny);
-            float mask = std::clamp(1.05f - r, 0.0f, 1.0f);
-            float core = std::pow(mask, 1.2f);
-            unsigned char alpha = static_cast<unsigned char>(std::clamp(core * 255.0f, 0.0f, 255.0f));
-            unsigned char glow = static_cast<unsigned char>(std::clamp(220.0f + 35.0f * mask, 0.0f, 255.0f));
-            size_t idx = (y * size + x) * 4;
-            pixels[idx + 0] = glow;
-            pixels[idx + 1] = glow;
-            pixels[idx + 2] = glow;
-            pixels[idx + 3] = alpha;
-        }
-    }
-    GLuint tex = 0;
-    glGenTextures(1, &tex);
-    if(tex == 0) return 0;
-    glBindTexture(GL_TEXTURE_2D, tex);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, size, size, 0, GL_RGBA, GL_UNSIGNED_BYTE, pixels.data());
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-    glBindTexture(GL_TEXTURE_2D, 0);
-    return tex;
 }
 
 glm::vec3 sampleTerrainNormal(float worldX, float worldZ){
@@ -883,6 +855,34 @@ void main(){
 }
 )GLSL";
 
+static const char* kBeaconSphereVertex = R"GLSL(
+#version 450 core
+layout(location=0) in vec3 aPos;
+layout(location=1) in vec3 aNormal;
+uniform mat4 uModel;
+uniform mat4 uViewProj;
+out vec3 vNormal;
+void main(){
+    vec4 worldPos = uModel * vec4(aPos, 1.0);
+    vNormal = mat3(uModel) * aNormal;
+    gl_Position = uViewProj * worldPos;
+}
+)GLSL";
+
+static const char* kBeaconSphereFragment = R"GLSL(
+#version 450 core
+in vec3 vNormal;
+out vec4 FragColor;
+uniform vec3 uColor;
+uniform float uIntensity;
+void main(){
+    vec3 n = normalize(vNormal);
+    float rim = pow(1.0 - max(n.y, 0.0), 3.0);
+    float glow = mix(0.9, 1.2, rim);
+    FragColor = vec4(uColor * uIntensity * glow, 1.0);
+}
+)GLSL";
+
 // Simple depth shader (renders scene depth from light's POV)
 static const char* kDepthVertex = R"GLSL(
 #version 450 core
@@ -1586,12 +1586,7 @@ bool Game::init(){
         m_campfireLight.enabled = false;
     }
 
-    if(m_beaconDiscTexture == 0){
-        m_beaconDiscTexture = createBeaconDiscTexture(192);
-        if(m_beaconDiscTexture == 0){
-            std::cerr << "[Game] Failed to create beacon disc texture" << std::endl;
-        }
-    }
+    initBeaconSphere();
 
     // Load stick model for world interaction
     std::string stickPath = resolveExistingPath({
@@ -2006,6 +2001,17 @@ void Game::render(){
             shader->setFloat("uSpotLightOuterCutoff", m_beaconLight.outerCutoffCos);
         }
     };
+    auto uploadBeaconLocalLight = [&](Shader* shader, bool enabled){
+        if(!shader) return;
+        bool active = enabled && m_beaconGlowVisible && m_beaconLight.enabled;
+        shader->setBool("uBeaconLightEnabled", active);
+        if(active){
+            shader->setVec3("uBeaconLightPos", m_beaconGlowWorldPos);
+            shader->setVec3("uBeaconLightColor", kBeaconLocalLightColor);
+            shader->setFloat("uBeaconLightIntensity", kBeaconLocalLightIntensity);
+            shader->setFloat("uBeaconLightRadius", kBeaconLocalLightRadiusFactor * m_lighthouseScale);
+        }
+    };
 
     glViewport(0,0,m_shadowMapSize,m_shadowMapSize);
     glBindFramebuffer(GL_FRAMEBUFFER, m_shadowFBO);
@@ -2172,6 +2178,7 @@ void Game::render(){
 
     if(m_characterReady && m_characterShader){
         m_characterShader->bind();
+        uploadBeaconLocalLight(m_characterShader, false);
         m_characterShader->setBool("uUseSkinning", true);
         m_characterShader->setMat4("uModel", characterModel);
         m_characterShader->setMat4("uView", m_camera->viewMatrix());
@@ -2211,6 +2218,7 @@ void Game::render(){
         lighthouseModel = glm::scale(lighthouseModel, glm::vec3(m_lighthouseScale));
         
         m_characterShader->bind();
+        uploadBeaconLocalLight(m_characterShader, true);
         m_characterShader->setBool("uUseSkinning", false);
         m_characterShader->setMat4("uModel", lighthouseModel);
         m_characterShader->setMat4("uView", m_camera->viewMatrix());
@@ -2247,6 +2255,7 @@ void Game::render(){
     // Render trees (static model instances)
     if(m_treeReady && m_characterShader && !m_treeInstances.empty() && !m_treeMesh.parts.empty()){
         m_characterShader->bind();
+        uploadBeaconLocalLight(m_characterShader, false);
         m_characterShader->setBool("uUseSkinning", false);
         m_characterShader->setMat4("uView", m_camera->viewMatrix());
         m_characterShader->setMat4("uProj", m_camera->projectionMatrix());
@@ -2293,6 +2302,7 @@ void Game::render(){
         campfireModel = glm::scale(campfireModel, glm::vec3(m_campfireScale));
 
         m_characterShader->bind();
+        uploadBeaconLocalLight(m_characterShader, false);
         m_characterShader->setBool("uUseSkinning", false);
         m_characterShader->setMat4("uModel", campfireModel);
         m_characterShader->setMat4("uView", m_camera->viewMatrix());
@@ -2327,6 +2337,7 @@ void Game::render(){
     // Render stick (world item or attached to character)
     if(m_stickReady && m_characterShader && !m_stickMesh.parts.empty()){
         m_characterShader->bind();
+        uploadBeaconLocalLight(m_characterShader, false);
         m_characterShader->setBool("uUseSkinning", false);
         m_characterShader->setMat4("uModel", m_stickItem.worldMatrix);
         m_characterShader->setMat4("uView", m_camera->viewMatrix());
@@ -2368,6 +2379,7 @@ void Game::render(){
         hutModel = glm::scale(hutModel, glm::vec3(m_forestHutScale));
 
         m_characterShader->bind();
+        uploadBeaconLocalLight(m_characterShader, false);
         m_characterShader->setBool("uUseSkinning", false);
         m_characterShader->setMat4("uModel", hutModel);
         m_characterShader->setMat4("uView", m_camera->viewMatrix());
@@ -2434,13 +2446,13 @@ void Game::render(){
         glActiveTexture(GL_TEXTURE0);
     }
     
+    glm::mat4 view = m_camera->viewMatrix();
+    glm::mat4 viewProj = m_camera->projectionMatrix() * view;
     if(m_fireFXReady){
-        glm::mat4 view = m_camera->viewMatrix();
-        glm::mat4 viewProj = m_camera->projectionMatrix() * view;
         renderFireParticles(viewProj, view);
-        renderStickFlame(viewProj, view);
-        renderBeaconGlow(viewProj, view);
     }
+    renderStickFlame(viewProj, view);
+    renderBeaconGlow(viewProj, view);
 
     // Render water
     glEnable(GL_BLEND);
@@ -2681,6 +2693,79 @@ void Game::initStickFlameBillboard(){
     m_stickFlameReady = true;
 }
 
+void Game::initBeaconSphere(){
+    if(m_beaconSphereReady)
+        return;
+    if(m_beaconSphereShader == nullptr){
+        m_beaconSphereShader = new Shader();
+        if(!m_beaconSphereShader->compile(kBeaconSphereVertex, kBeaconSphereFragment)){
+            delete m_beaconSphereShader;
+            m_beaconSphereShader = nullptr;
+            return;
+        }
+    }
+
+    const int stacks = 16;
+    const int slices = 24;
+    const int vertsPerRing = slices + 1;
+    std::vector<float> vertices;
+    vertices.reserve((stacks + 1) * vertsPerRing * 6);
+    for(int stack = 0; stack <= stacks; ++stack){
+        float v = static_cast<float>(stack) / static_cast<float>(stacks);
+        float phi = glm::pi<float>() * v;
+        float y = std::cos(phi);
+        float r = std::sin(phi);
+        for(int slice = 0; slice <= slices; ++slice){
+            float u = static_cast<float>(slice) / static_cast<float>(slices);
+            float theta = glm::two_pi<float>() * u;
+            float x = r * std::cos(theta);
+            float z = r * std::sin(theta);
+            vertices.push_back(x);
+            vertices.push_back(y);
+            vertices.push_back(z);
+            vertices.push_back(x);
+            vertices.push_back(y);
+            vertices.push_back(z);
+        }
+    }
+
+    std::vector<unsigned int> indices;
+    indices.reserve(stacks * slices * 6);
+    for(int stack = 0; stack < stacks; ++stack){
+        for(int slice = 0; slice < slices; ++slice){
+            unsigned int first = static_cast<unsigned int>(stack * vertsPerRing + slice);
+            unsigned int second = first + vertsPerRing;
+            indices.push_back(first);
+            indices.push_back(second);
+            indices.push_back(first + 1);
+            indices.push_back(second);
+            indices.push_back(second + 1);
+            indices.push_back(first + 1);
+        }
+    }
+
+    glGenVertexArrays(1, &m_beaconSphereVAO);
+    glBindVertexArray(m_beaconSphereVAO);
+    glGenBuffers(1, &m_beaconSphereVBO);
+    glBindBuffer(GL_ARRAY_BUFFER, m_beaconSphereVBO);
+    glBufferData(GL_ARRAY_BUFFER, vertices.size() * sizeof(float), vertices.data(), GL_STATIC_DRAW);
+    glGenBuffers(1, &m_beaconSphereEBO);
+    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, m_beaconSphereEBO);
+    glBufferData(GL_ELEMENT_ARRAY_BUFFER, indices.size() * sizeof(unsigned int), indices.data(), GL_STATIC_DRAW);
+
+    glEnableVertexAttribArray(0);
+    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(float) * 6, reinterpret_cast<void*>(0));
+    glEnableVertexAttribArray(1);
+    glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, sizeof(float) * 6, reinterpret_cast<void*>(sizeof(float) * 3));
+
+    glBindVertexArray(0);
+    glBindBuffer(GL_ARRAY_BUFFER, 0);
+    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, 0);
+
+    m_beaconSphereIndexCount = static_cast<unsigned int>(indices.size());
+    m_beaconSphereReady = (m_beaconSphereVAO != 0 && m_beaconSphereIndexCount > 0);
+}
+
 void Game::respawnFireParticle(FireParticle& particle){
     std::uniform_real_distribution<float> spread(-0.35f, 0.35f);
     std::uniform_real_distribution<float> rise(1.6f, 2.6f);
@@ -2792,53 +2877,29 @@ void Game::renderStickFlame(const glm::mat4& viewProj, const glm::mat4& view){
 }
 
 void Game::renderBeaconGlow(const glm::mat4& viewProj, const glm::mat4&){
-    if(!m_stickFlameReady || !m_stickFlameShader || !m_beaconGlowVisible || !m_beaconLight.enabled)
+    if(!m_beaconGlowVisible || !m_beaconLight.enabled)
         return;
-    if(m_beaconDiscTexture == 0)
+    if(!m_beaconSphereReady || !m_beaconSphereShader)
         return;
 
-    glm::vec3 beaconPos = m_beaconLight.position;
-    glm::vec3 planarDir(m_beaconLight.direction.x, 0.0f, m_beaconLight.direction.z);
-    float planarLen2 = glm::length2(planarDir);
-    if(planarLen2 < 1e-6f){
-        planarDir = glm::vec3(std::cos(m_beaconRotationAngle), 0.0f, std::sin(m_beaconRotationAngle));
-        planarLen2 = glm::length2(planarDir);
-    }
-    if(planarLen2 < 1e-6f){
-        planarDir = glm::vec3(1.0f, 0.0f, 0.0f);
-    } else {
-        planarDir /= std::sqrt(planarLen2);
-    }
-    glm::vec3 tangentDir(-planarDir.z, 0.0f, planarDir.x);
-    if(glm::length2(tangentDir) < 1e-6f){
-        tangentDir = glm::vec3(0.0f, 0.0f, 1.0f);
-    } else {
-        tangentDir = glm::normalize(tangentDir);
-    }
+    glm::vec3 spherePos = computeBeaconGlowPosition();
+    m_beaconGlowWorldPos = spherePos;
+    float sphereScale = kBeaconSphereScaleFactor * m_lighthouseScale;
 
-    float orbitRadius = 0.65f * m_lighthouseScale;
-    glm::vec3 orbitPos = beaconPos + planarDir * orbitRadius;
-    float discHeightOffset = 0.05f * m_lighthouseScale;
-    glm::vec3 discWorldPos = orbitPos + glm::vec3(0.0f, discHeightOffset, 0.0f);
-    float discSize = 0.65f * m_lighthouseScale;
+    glm::mat4 model(1.0f);
+    model = glm::translate(model, spherePos);
+    model = glm::scale(model, glm::vec3(sphereScale));
 
     glEnable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE);
     glDepthMask(GL_FALSE);
-    m_stickFlameShader->bind();
-    m_stickFlameShader->setMat4("uViewProj", viewProj);
-    m_stickFlameShader->setVec3("uWorldPos", discWorldPos);
-    m_stickFlameShader->setVec3("uCameraRight", tangentDir);
-    m_stickFlameShader->setVec3("uCameraUp", planarDir);
-    m_stickFlameShader->setFloat("uSize", discSize);
-    m_stickFlameShader->setFloat("uGlow", 0.85f);
-    m_stickFlameShader->setVec3("uTint", glm::vec3(1.35f, 1.32f, 1.2f));
-    m_stickFlameShader->setFloat("uOpacity", 1.0f);
-    glActiveTexture(GL_TEXTURE16);
-    glBindTexture(GL_TEXTURE_2D, m_beaconDiscTexture);
-    m_stickFlameShader->setInt("uFlameTex", 16);
-    glBindVertexArray(m_stickFlameVAO);
-    glDrawArrays(GL_TRIANGLES, 0, kFireQuadVertexCount);
+    m_beaconSphereShader->bind();
+    m_beaconSphereShader->setMat4("uViewProj", viewProj);
+    m_beaconSphereShader->setMat4("uModel", model);
+    m_beaconSphereShader->setVec3("uColor", glm::vec3(1.25f, 1.22f, 1.15f));
+    m_beaconSphereShader->setFloat("uIntensity", 1.35f);
+    glBindVertexArray(m_beaconSphereVAO);
+    glDrawElements(GL_TRIANGLES, static_cast<GLsizei>(m_beaconSphereIndexCount), GL_UNSIGNED_INT, nullptr);
     glBindVertexArray(0);
     glDepthMask(GL_TRUE);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
@@ -2861,29 +2922,51 @@ glm::vec3 Game::getLighthouseBeaconWorldPosition() const{
     return m_lighthousePosition + m_lighthouseBeaconLocal * m_lighthouseScale;
 }
 
+glm::vec3 Game::computeBeaconGlowPosition() const{
+    glm::vec3 beaconPos = m_beaconLight.position;
+    glm::vec3 planarDir(m_beaconLight.direction.x, 0.0f, m_beaconLight.direction.z);
+    float planarLen2 = glm::length2(planarDir);
+    if(planarLen2 < 1e-6f){
+        planarDir = glm::vec3(std::cos(m_beaconRotationAngle), 0.0f, std::sin(m_beaconRotationAngle));
+        planarLen2 = glm::length2(planarDir);
+    }
+    if(planarLen2 < 1e-6f){
+        planarDir = glm::vec3(1.0f, 0.0f, 0.0f);
+    } else {
+        planarDir /= std::sqrt(planarLen2);
+    }
+    float orbitRadius = kBeaconOrbitRadiusFactor * m_lighthouseScale;
+    glm::vec3 orbitPos = beaconPos + planarDir * orbitRadius;
+    float heightOffset = kBeaconHeightOffsetFactor * m_lighthouseScale;
+    return orbitPos + glm::vec3(0.0f, heightOffset, 0.0f);
+}
+
 void Game::updateBeaconLight(float dt){
     if(!m_lighthouseReady){
         m_beaconLight.enabled = false;
         m_beaconGlowVisible = false;
+        m_beaconGlowWorldPos = glm::vec3(0.0f);
         return;
     }
+    glm::vec3 beaconPos = getLighthouseBeaconWorldPosition();
+    m_beaconLight.position = beaconPos;
     if(!m_isNightMode){
         m_beaconLight.enabled = false;
         m_beaconGlowVisible = false;
+        m_beaconGlowWorldPos = beaconPos;
         return;
     }
     m_beaconRotationAngle = std::fmod(m_beaconRotationAngle + m_beaconRotationSpeed * dt, glm::two_pi<float>());
-    glm::vec3 beaconPos = getLighthouseBeaconWorldPosition();
     glm::vec3 sweepDir(std::cos(m_beaconRotationAngle), -0.2f, std::sin(m_beaconRotationAngle));
     if(glm::length2(sweepDir) < 1e-4f){
         sweepDir = glm::vec3(0.0f, -1.0f, 0.0f);
     } else {
         sweepDir = glm::normalize(sweepDir);
     }
-    m_beaconLight.position = beaconPos;
     m_beaconLight.direction = sweepDir;
     m_beaconLight.enabled = true;
     m_beaconGlowVisible = true;
+    m_beaconGlowWorldPos = computeBeaconGlowPosition();
 }
 
 void Game::shutdown(){
@@ -2898,7 +2981,6 @@ void Game::shutdown(){
     delete m_depthShader; m_depthShader = nullptr;
     delete m_skinnedDepthShader; m_skinnedDepthShader = nullptr;
     if(m_fireTexture) { glDeleteTextures(1, &m_fireTexture); m_fireTexture = 0; }
-    if(m_beaconDiscTexture) { glDeleteTextures(1, &m_beaconDiscTexture); m_beaconDiscTexture = 0; }
     if(m_fireInstanceVBO) { glDeleteBuffers(1, &m_fireInstanceVBO); m_fireInstanceVBO = 0; }
     if(m_fireQuadVBO) { glDeleteBuffers(1, &m_fireQuadVBO); m_fireQuadVBO = 0; }
     if(m_fireVAO) { glDeleteVertexArrays(1, &m_fireVAO); m_fireVAO = 0; }
@@ -2906,6 +2988,12 @@ void Game::shutdown(){
     if(m_stickFlameVBO) { glDeleteBuffers(1, &m_stickFlameVBO); m_stickFlameVBO = 0; }
     if(m_stickFlameVAO) { glDeleteVertexArrays(1, &m_stickFlameVAO); m_stickFlameVAO = 0; }
     delete m_stickFlameShader; m_stickFlameShader = nullptr;
+    if(m_beaconSphereEBO) { glDeleteBuffers(1, &m_beaconSphereEBO); m_beaconSphereEBO = 0; }
+    if(m_beaconSphereVBO) { glDeleteBuffers(1, &m_beaconSphereVBO); m_beaconSphereVBO = 0; }
+    if(m_beaconSphereVAO) { glDeleteVertexArrays(1, &m_beaconSphereVAO); m_beaconSphereVAO = 0; }
+    delete m_beaconSphereShader; m_beaconSphereShader = nullptr;
+    m_beaconSphereIndexCount = 0;
+    m_beaconSphereReady = false;
     m_stickFlameReady = false;
     m_fireFXReady = false;
     if(m_grassTexture) { glDeleteTextures(1, &m_grassTexture); m_grassTexture = 0; }

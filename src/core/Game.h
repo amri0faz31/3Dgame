@@ -94,7 +94,6 @@ private:
     unsigned int m_fireQuadVBO = 0;
     unsigned int m_fireInstanceVBO = 0;
     unsigned int m_fireTexture = 0;
-    unsigned int m_beaconDiscTexture = 0;
     class Shader* m_stickFlameShader = nullptr;
     unsigned int m_stickFlameVAO = 0;
     unsigned int m_stickFlameVBO = 0;
@@ -102,6 +101,13 @@ private:
     glm::vec3 m_stickFlamePos{0.0f};
     bool m_stickFlameVisible = false;
     bool m_beaconGlowVisible = false;
+    glm::vec3 m_beaconGlowWorldPos{0.0f};
+    class Shader* m_beaconSphereShader = nullptr;
+    unsigned int m_beaconSphereVAO = 0;
+    unsigned int m_beaconSphereVBO = 0;
+    unsigned int m_beaconSphereEBO = 0;
+    unsigned int m_beaconSphereIndexCount = 0;
+    bool m_beaconSphereReady = false;
     struct FireParticle {
         glm::vec3 position{0.0f};
         glm::vec3 velocity{0.0f, 1.0f, 0.0f};
@@ -116,6 +122,7 @@ private:
     bool m_fireFXReady = false;
     void initCampfireFireFX();
     void initStickFlameBillboard();
+    void initBeaconSphere();
     void respawnFireParticle(FireParticle& particle);
     void updateFireParticles(float dt);
     void uploadFireParticlesToGPU();
@@ -296,6 +303,7 @@ private:
     glm::mat4 buildHeldStickMatrix() const;
     glm::vec3 getStickTipWorldPosition() const;
     glm::vec3 getLighthouseBeaconWorldPosition() const;
+    glm::vec3 computeBeaconGlowPosition() const;
     void igniteStickTorch();
     void updateStickLight(const glm::vec3& tipWorldPos);
 };
