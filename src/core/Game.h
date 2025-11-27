@@ -56,6 +56,15 @@ private:
         float specularStrength = 0.5f;
         float shininess = 32.f;
     } m_light;
+    struct FogSettings {
+        bool enabled = false;
+        float start = 150.0f;
+        float end = 800.0f;
+        float density = 0.002f;
+        int mode = 0; // 0=linear,1=exp,2=exp2
+    };
+    FogSettings m_fogDay{ false, 500.0f, 1600.0f, 0.0005f, 0 };
+    FogSettings m_fogNight{ true, 150.0f, 800.0f, 0.0020f, 2 };
     struct PointLight {
         glm::vec3 position{0.0f};
         glm::vec3 color{1.0f};
@@ -304,6 +313,7 @@ private:
     glm::vec3 getStickTipWorldPosition() const;
     glm::vec3 getLighthouseBeaconWorldPosition() const;
     glm::vec3 computeBeaconGlowPosition() const;
+    const FogSettings& getActiveFogSettings() const;
     void igniteStickTorch();
     void updateStickLight(const glm::vec3& tipWorldPos);
 };

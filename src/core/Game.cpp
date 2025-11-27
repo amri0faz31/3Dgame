@@ -169,7 +169,13 @@ uniform sampler2D uTexSandgrass;
 uniform sampler2D uTexRocks;
 uniform sampler2D uShadowMap;
 uniform mat4 uLightSpace;
-uniform vec3 uSkyColor; uniform float uFogStart; uniform float uFogRange;
+uniform vec3 uSkyColor;
+uniform bool uFogEnabled;
+uniform vec3 uFogColor;
+uniform float uFogStart;
+uniform float uFogEnd;
+uniform float uFogDensity;
+uniform int uFogMode;
 const int MAX_POINT_LIGHTS = 2;
 uniform int uPointLightCount;
 uniform vec3 uPointLightPos[MAX_POINT_LIGHTS];
@@ -189,6 +195,22 @@ uniform float uSpotLightOuterCutoff;
 const vec3 lightGreen  = vec3(0.35, 0.80, 0.30);
 const vec3 darkGreen   = vec3(0.06, 0.40, 0.12);
 const vec3 lightBrown  = vec3(0.48, 0.37, 0.28);
+
+float computeFogAmount(vec3 worldPos){
+    if(!uFogEnabled) return 0.0;
+    float dist = length(uCameraPos - worldPos);
+    if(uFogMode == 0){
+        float range = max(uFogEnd - uFogStart, 0.0001);
+        return clamp((dist - uFogStart) / range, 0.0, 1.0);
+    } else if(uFogMode == 1){
+        float fog = 1.0 - exp(-dist * uFogDensity);
+        return clamp(fog, 0.0, 1.0);
+    } else {
+        float d = dist * uFogDensity;
+        float fog = 1.0 - exp(-(d * d));
+        return clamp(fog, 0.0, 1.0);
+    }
+}
 
 void main(){
     vec3 n = normalize(vNormal);
@@ -354,8 +376,8 @@ void main(){
         }
     }
     
-    // Linear fog based on distance to camera (start/range) for controlled blending
-    // Fog disabled; keep terrain color untouched by distance-based blending
+    float fogAmount = computeFogAmount(vWorldPos);
+    color = mix(color, uFogColor, fogAmount);
     
     // Simple gamma correction
     color = pow(color, vec3(1.0/2.2));
@@ -443,8 +465,12 @@ uniform float uSpotLightIntensity;
 uniform float uSpotLightRange;
 uniform float uSpotLightInnerCutoff;
 uniform float uSpotLightOuterCutoff;
+uniform bool uFogEnabled;
+uniform vec3 uFogColor;
 uniform float uFogStart;
-uniform float uFogRange;
+uniform float uFogEnd;
+uniform float uFogDensity;
+uniform int uFogMode;
 uniform sampler2D uWaveNormal0;
 uniform sampler2D uWaveNormal1;
 uniform samplerCube uEnvMap;
@@ -560,11 +586,28 @@ void main(){
         }
     }
 
-    // Fog disabled; water retains full color at all distances
+    // Apply scene fog (night-only via uniform). Blend water color while preserving alpha
+    float fogAmount = 0.0;
+    if(uFogEnabled){
+        float dist = length(uCameraPos - fs_in.worldPos);
+        if(uFogMode == 0){
+            float range = max(uFogEnd - uFogStart, 0.0001);
+            fogAmount = clamp((dist - uFogStart) / range, 0.0, 1.0);
+        } else if(uFogMode == 1){
+            float f = 1.0 - exp(-dist * uFogDensity);
+            fogAmount = clamp(f, 0.0, 1.0);
+        } else {
+            float d = dist * uFogDensity;
+            float f = 1.0 - exp(-(d * d));
+            fogAmount = clamp(f, 0.0, 1.0);
+        }
+    }
+
+    vec3 finalColor = mix(color, uFogColor, fogAmount);
 
     float depthAlpha = mix(0.98, 0.78, depth);
     float alpha = mix(depthAlpha, 1.0, foamMask * 0.15);
-    FragColor = vec4(color, alpha);
+    FragColor = vec4(finalColor, alpha);
 }
 
 float shadowFactor(vec4 lightSpacePos){
@@ -717,6 +760,13 @@ uniform float uAlphaCutoff;
 uniform vec3 uLightDir;
 uniform vec3 uLightColor;
 uniform vec3 uAmbientColor;
+uniform vec3 uCameraPos;
+uniform bool uFogEnabled;
+uniform vec3 uFogColor;
+uniform float uFogStart;
+uniform float uFogEnd;
+uniform float uFogDensity;
+uniform int uFogMode;
 const int MAX_POINT_LIGHTS = 2;
 uniform int uPointLightCount;
 uniform vec3 uPointLightPos[MAX_POINT_LIGHTS];
@@ -776,7 +826,25 @@ void main(){
     vec3 lit = ambient + diffuse;
     lit = mix(lit, vec3(0.92, 1.0, 0.88), 0.12);
 
-    FragColor = vec4(lit, tex.a);
+    // Fog: compute amount and blend grass color while preserving alpha
+    float fogAmount = 0.0;
+    if(uFogEnabled){
+        float dist = length(uCameraPos - fs_in.worldPos);
+        if(uFogMode == 0){
+            float range = max(uFogEnd - uFogStart, 0.0001);
+            fogAmount = clamp((dist - uFogStart) / range, 0.0, 1.0);
+        } else if(uFogMode == 1){
+            float f = 1.0 - exp(-dist * uFogDensity);
+            fogAmount = clamp(f, 0.0, 1.0);
+        } else {
+            float d = dist * uFogDensity;
+            float f = 1.0 - exp(-(d * d));
+            fogAmount = clamp(f, 0.0, 1.0);
+        }
+    }
+    vec3 finalCol = mix(lit, uFogColor, fogAmount);
+
+    FragColor = vec4(finalCol, tex.a);
 }
 )GLSL";
 
@@ -1421,7 +1489,7 @@ bool Game::init(){
             m_lighthouseBeaconLocal = m_lighthouseMesh.maxBounds;
             m_beaconLight.color = glm::vec3(1.0f);
             m_beaconLight.range = 220.0f;
-            m_beaconLight.intensity = 4.0f;
+            m_beaconLight.intensity = 7.0f;
             float inner = glm::radians(7.0f);
             float outer = glm::radians(10.5f);
             m_beaconLight.innerCutoffCos = std::cos(inner);
@@ -1960,8 +2028,10 @@ void Game::render(){
     
     // Sky color and fog based on time of day
     glm::vec3 skyColor = m_isNightMode ? glm::vec3(0.0075f, 0.01125f, 0.03f) : glm::vec3(0.53f, 0.81f, 0.92f);
-    const float fogStart = 200.0f;
-    const float fogRange = 1200.0f;
+    const FogSettings& fogSettings = getActiveFogSettings();
+    bool fogActive = fogSettings.enabled && m_isNightMode;
+    glm::vec3 fogColor = m_isNightMode ? glm::clamp(skyColor * glm::vec3(0.85f, 0.9f, 1.05f), glm::vec3(0.0f), glm::vec3(1.0f))
+                                       : skyColor;
 
     auto uploadPointLights = [&](Shader* shader){
         if(!shader) return;
@@ -2000,6 +2070,15 @@ void Game::render(){
             shader->setFloat("uSpotLightInnerCutoff", m_beaconLight.innerCutoffCos);
             shader->setFloat("uSpotLightOuterCutoff", m_beaconLight.outerCutoffCos);
         }
+    };
+    auto uploadFog = [&](Shader* shader){
+        if(!shader) return;
+        shader->setBool("uFogEnabled", fogActive);
+        shader->setVec3("uFogColor", fogColor);
+        shader->setFloat("uFogStart", fogSettings.start);
+        shader->setFloat("uFogEnd", fogSettings.end);
+        shader->setFloat("uFogDensity", fogSettings.density);
+        shader->setInt("uFogMode", fogSettings.mode);
     };
     auto uploadBeaconLocalLight = [&](Shader* shader, bool enabled){
         if(!shader) return;
@@ -2139,6 +2218,7 @@ void Game::render(){
     m_shader->setFloat("uSpecularStrength", m_light.specularStrength);
     m_shader->setFloat("uShininess", m_light.shininess);
     m_shader->setVec3("uCameraPos", m_camera->position());
+    uploadFog(m_shader);
     uploadPointLights(m_shader);
     uploadSpotLight(m_shader);
     // Terrain displacement + texture fetch uniforms
@@ -2169,15 +2249,12 @@ void Game::render(){
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, m_terrain->heightTexture());
     m_shader->setInt("uHeightMap", 0);
-        // Fog parameters to give depth cue and break the infinite look
         m_shader->setVec3("uSkyColor", skyColor);
-        // Start fog after 200 world units, reach full fog after additional 1200 units
-        m_shader->setFloat("uFogStart", fogStart);
-        m_shader->setFloat("uFogRange", fogRange);
     m_renderer->drawMesh(*m_terrain->mesh(), *m_shader, *m_camera, model);
 
     if(m_characterReady && m_characterShader){
         m_characterShader->bind();
+        uploadFog(m_characterShader);
         uploadBeaconLocalLight(m_characterShader, false);
         m_characterShader->setBool("uUseSkinning", true);
         m_characterShader->setMat4("uModel", characterModel);
@@ -2193,8 +2270,6 @@ void Game::render(){
         uploadSpotLight(m_characterShader);
         m_characterShader->setVec3("uCameraPos", m_camera->position());
         m_characterShader->setVec3("uSkyColor", skyColor);
-        m_characterShader->setFloat("uFogStart", fogStart);
-        m_characterShader->setFloat("uFogRange", fogRange);
         m_characterShader->setFloat("uSpecularStrength", m_light.specularStrength * 0.8f);
         m_characterShader->setFloat("uShininess", m_light.shininess);
         // Add shadow receiving
@@ -2218,6 +2293,7 @@ void Game::render(){
         lighthouseModel = glm::scale(lighthouseModel, glm::vec3(m_lighthouseScale));
         
         m_characterShader->bind();
+        uploadFog(m_characterShader);
         uploadBeaconLocalLight(m_characterShader, true);
         m_characterShader->setBool("uUseSkinning", false);
         m_characterShader->setMat4("uModel", lighthouseModel);
@@ -2233,8 +2309,6 @@ void Game::render(){
         uploadSpotLight(m_characterShader);
         m_characterShader->setVec3("uCameraPos", m_camera->position());
         m_characterShader->setVec3("uSkyColor", skyColor);
-        m_characterShader->setFloat("uFogStart", fogStart);
-        m_characterShader->setFloat("uFogRange", fogRange);
         m_characterShader->setFloat("uSpecularStrength", m_light.specularStrength * 0.8f);
         m_characterShader->setFloat("uShininess", m_light.shininess);
         m_characterShader->setMat4("uLightSpace", lightSpace);
@@ -2255,6 +2329,7 @@ void Game::render(){
     // Render trees (static model instances)
     if(m_treeReady && m_characterShader && !m_treeInstances.empty() && !m_treeMesh.parts.empty()){
         m_characterShader->bind();
+        uploadFog(m_characterShader);
         uploadBeaconLocalLight(m_characterShader, false);
         m_characterShader->setBool("uUseSkinning", false);
         m_characterShader->setMat4("uView", m_camera->viewMatrix());
@@ -2268,8 +2343,6 @@ void Game::render(){
         uploadSpotLight(m_characterShader);
         m_characterShader->setVec3("uCameraPos", m_camera->position());
         m_characterShader->setVec3("uSkyColor", skyColor);
-        m_characterShader->setFloat("uFogStart", fogStart);
-        m_characterShader->setFloat("uFogRange", fogRange);
         m_characterShader->setFloat("uSpecularStrength", m_light.specularStrength * 0.8f);
         m_characterShader->setFloat("uShininess", m_light.shininess);
         m_characterShader->setMat4("uLightSpace", lightSpace);
@@ -2302,6 +2375,7 @@ void Game::render(){
         campfireModel = glm::scale(campfireModel, glm::vec3(m_campfireScale));
 
         m_characterShader->bind();
+        uploadFog(m_characterShader);
         uploadBeaconLocalLight(m_characterShader, false);
         m_characterShader->setBool("uUseSkinning", false);
         m_characterShader->setMat4("uModel", campfireModel);
@@ -2315,8 +2389,6 @@ void Game::render(){
         uploadPointLights(m_characterShader);
         m_characterShader->setVec3("uCameraPos", m_camera->position());
         m_characterShader->setVec3("uSkyColor", skyColor);
-        m_characterShader->setFloat("uFogStart", fogStart);
-        m_characterShader->setFloat("uFogRange", fogRange);
         m_characterShader->setFloat("uSpecularStrength", m_light.specularStrength * 0.8f);
         m_characterShader->setFloat("uShininess", m_light.shininess);
         m_characterShader->setMat4("uLightSpace", lightSpace);
@@ -2337,6 +2409,7 @@ void Game::render(){
     // Render stick (world item or attached to character)
     if(m_stickReady && m_characterShader && !m_stickMesh.parts.empty()){
         m_characterShader->bind();
+        uploadFog(m_characterShader);
         uploadBeaconLocalLight(m_characterShader, false);
         m_characterShader->setBool("uUseSkinning", false);
         m_characterShader->setMat4("uModel", m_stickItem.worldMatrix);
@@ -2351,8 +2424,6 @@ void Game::render(){
         uploadSpotLight(m_characterShader);
         m_characterShader->setVec3("uCameraPos", m_camera->position());
         m_characterShader->setVec3("uSkyColor", skyColor);
-        m_characterShader->setFloat("uFogStart", fogStart);
-        m_characterShader->setFloat("uFogRange", fogRange);
         m_characterShader->setFloat("uSpecularStrength", m_light.specularStrength * 0.8f);
         m_characterShader->setFloat("uShininess", m_light.shininess);
         m_characterShader->setMat4("uLightSpace", lightSpace);
@@ -2379,6 +2450,7 @@ void Game::render(){
         hutModel = glm::scale(hutModel, glm::vec3(m_forestHutScale));
 
         m_characterShader->bind();
+        uploadFog(m_characterShader);
         uploadBeaconLocalLight(m_characterShader, false);
         m_characterShader->setBool("uUseSkinning", false);
         m_characterShader->setMat4("uModel", hutModel);
@@ -2393,8 +2465,6 @@ void Game::render(){
         uploadSpotLight(m_characterShader);
         m_characterShader->setVec3("uCameraPos", m_camera->position());
         m_characterShader->setVec3("uSkyColor", skyColor);
-        m_characterShader->setFloat("uFogStart", fogStart);
-        m_characterShader->setFloat("uFogRange", fogRange);
         m_characterShader->setFloat("uSpecularStrength", m_light.specularStrength * 0.8f);
         m_characterShader->setFloat("uShininess", m_light.shininess);
         m_characterShader->setMat4("uLightSpace", lightSpace);
@@ -2415,6 +2485,7 @@ void Game::render(){
     // Alpha-tested grass billboards render after terrain so depth clipping still works
     if(m_grassPatchCount > 0 && m_grassVAO != 0 && m_grassShader){
         m_grassShader->bind();
+        m_grassShader->setVec3("uCameraPos", m_camera->position());
         m_grassShader->setMat4("uView", m_camera->viewMatrix());
         m_grassShader->setMat4("uProj", m_camera->projectionMatrix());
         m_grassShader->setMat4("uLightSpace", lightSpace);  // For shadows
@@ -2431,6 +2502,7 @@ void Game::render(){
         float grassAmbientMult = m_isNightMode ? 0.35f : 0.7f;
         glm::vec3 grassAmbient = m_light.color * m_light.ambient * grassAmbientMult;
         m_grassShader->setVec3("uAmbientColor", grassAmbient);
+        uploadFog(m_grassShader);
         uploadPointLights(m_grassShader);
         uploadSpotLight(m_grassShader);
         glActiveTexture(GL_TEXTURE7);
@@ -2459,11 +2531,10 @@ void Game::render(){
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
     glDepthMask(GL_FALSE); // Don't write to depth for transparency
     m_waterShader->bind();
+    uploadFog(m_waterShader);
     m_waterShader->setVec3("uCameraPos", m_camera->position());
     m_waterShader->setFloat("uTime", Time::elapsed());
     m_waterShader->setVec3("uSkyColor", skyColor);
-    m_waterShader->setFloat("uFogStart", fogStart);
-    m_waterShader->setFloat("uFogRange", fogRange);
     m_waterShader->setVec3("uLightDir", m_light.direction);
     m_waterShader->setVec3("uLightColor", m_light.color);
     uploadPointLights(m_waterShader);
@@ -2939,6 +3010,10 @@ glm::vec3 Game::computeBeaconGlowPosition() const{
     glm::vec3 orbitPos = beaconPos + planarDir * orbitRadius;
     float heightOffset = kBeaconHeightOffsetFactor * m_lighthouseScale;
     return orbitPos + glm::vec3(0.0f, heightOffset, 0.0f);
+}
+
+const Game::FogSettings& Game::getActiveFogSettings() const{
+    return m_isNightMode ? m_fogNight : m_fogDay;
 }
 
 void Game::updateBeaconLight(float dt){

@@ -18,8 +18,12 @@ uniform vec3 uLightColor;
 uniform vec3 uAmbientColor;
 uniform vec3 uCameraPos;
 uniform vec3 uSkyColor;
+uniform bool uFogEnabled;
+uniform vec3 uFogColor;
 uniform float uFogStart;
-uniform float uFogRange;
+uniform float uFogEnd;
+uniform float uFogDensity;
+uniform int uFogMode;
 uniform float uSpecularStrength;
 uniform float uShininess;
 const int MAX_POINT_LIGHTS = 2;
@@ -115,6 +119,24 @@ void main(){
 
     // Fog disabled; character color remains unaffected by distance
     color = pow(color, vec3(1.0 / 2.2));
+
+    // Compute fog amount and blend when enabled (supports linear/exp/exp2 modes)
+    float fogAmount = 0.0;
+    if(uFogEnabled){
+        float dist = length(uCameraPos - fs_in.worldPos);
+        if(uFogMode == 0){
+            float range = max(uFogEnd - uFogStart, 0.0001);
+            fogAmount = clamp((dist - uFogStart) / range, 0.0, 1.0);
+        } else if(uFogMode == 1){
+            float f = 1.0 - exp(-dist * uFogDensity);
+            fogAmount = clamp(f, 0.0, 1.0);
+        } else {
+            float d = dist * uFogDensity;
+            float f = 1.0 - exp(-(d * d));
+            fogAmount = clamp(f, 0.0, 1.0);
+        }
+    }
+    color = mix(color, uFogColor, fogAmount);
 
     FragColor = vec4(color, 1.0);
 }
